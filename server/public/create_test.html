@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>テスト作成 - InstantTest</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main-content">コンテンツへスキップ</a>
+  <main class="task-builder-shell" id="main-content">
+    <header class="task-builder-header">
+      <div>
+        <p class="eyebrow">Test Builder</p>
+        <h1>テスト作成</h1>
+        <p class="section-note">手動作成フローは維持したまま、編集画面をタスクフォーカス型に整理しています。</p>
+      </div>
+      <div class="task-builder-header__actions">
+        <a href="/" class="btn btn-ghost">ダッシュボードへ戻る</a>
+      </div>
+    </header>
+
+    <section class="task-page-hero compact">
+      <div>
+        <p class="eyebrow">Setup</p>
+        <h2>基本情報</h2>
+        <p class="lead">テスト名と所属クラスを確認してから問題を追加します。</p>
+      </div>
+    </section>
+
+    <div class="task-builder-grid">
+      <div class="task-builder-main">
+        <section class="task-section-card">
+          <div class="task-form-stack">
+            <label>テスト名
+              <input id="test-name" type="text" placeholder="テスト名" readonly>
+            </label>
+            <label>クラス
+              <select id="class-select"><option value="">クラス選択</option></select>
+            </label>
+          </div>
+        </section>
+
+        <section class="task-section-card">
+          <fieldset>
+            <legend>作成方法</legend>
+            <div class="task-toggle-row">
+              <label class="task-toggle"><input type="radio" name="create-mode" value="manual" checked> <span>手動で作成</span></label>
+              <label class="task-toggle"><input type="radio" name="create-mode" value="auto" disabled> <span>自動で作成（未実装）</span></label>
+            </div>
+          </fieldset>
+        </section>
+
+        <section class="task-section-card">
+          <div class="task-section-heading">
+            <div>
+              <h2>問題エディタ</h2>
+              <p class="section-note">空の入力欄からすぐ書き始められます。ショートカットと選択肢プリセットで連続作成しやすくしています。</p>
+            </div>
+          </div>
+          <div class="task-warning">
+            <strong>注意:</strong> このテストの問題数は最大<strong>100問</strong>までです。
+          </div>
+          <div class="task-form-stack" style="margin-top:16px;">
+            <div class="builder-editor-toolbar">
+              <div class="builder-editor-toolbar__stats">
+                <span id="editor-mode-chip" class="task-chip task-chip-muted">新規作成</span>
+                <span id="editor-question-count" class="task-chip">0 / 100問</span>
+                <span id="editor-choice-count" class="task-chip task-chip-muted">選択肢 2件</span>
+              </div>
+              <div class="builder-editor-toolbar__actions">
+                <button id="set-two-choices" class="btn btn-small btn-ghost" type="button">2択</button>
+                <button id="set-four-choices" class="btn btn-small btn-ghost" type="button">4択</button>
+              </div>
+            </div>
+            <h3 id="editor-title">新しい問題を作成</h3>
+            <label>問題文
+              <textarea id="question-text" rows="4" placeholder="問題文を入力"></textarea>
+            </label>
+            <div class="builder-shortcuts" aria-label="入力ショートカット">
+              <span><kbd>Enter</kbd>で次の選択肢へ</span>
+              <span><kbd>Ctrl</kbd> + <kbd>Enter</kbd>で問題を追加</span>
+            </div>
+            <div id="choices-editor">
+              <div class="task-section-heading">
+                <div>
+                  <h4>選択肢</h4>
+                  <p class="section-note">少なくとも2つ、正解は1つ以上必要です。選択肢は空欄から入力できます。</p>
+                </div>
+                <button id="add-choice" class="btn btn-ghost" type="button">選択肢を追加</button>
+              </div>
+              <div id="choices-list"></div>
+            </div>
+            <div class="task-inline-actions">
+              <button id="add-question" class="btn btn-primary" type="button">問題を追加</button>
+              <button id="clear-editor" class="btn btn-ghost" type="button">エディタをクリア</button>
+            </div>
+            <div style="display:flex; justify-content:flex-end; margin-top:12px;">
+              <button id="save-test" class="btn btn-primary" type="button">テスト作成</button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <aside class="task-builder-side">
+        <section class="task-section-card">
+          <div class="task-section-heading">
+            <div>
+              <h2>問題一覧</h2>
+              <p class="section-note">追加済みの問題を編集・削除できます。</p>
+            </div>
+          </div>
+          <div id="questions-list">（問題がありません）</div>
+        </section>
+
+        <section class="task-section-card">
+          <div class="task-section-heading">
+            <div>
+              <h3>保存ステータス</h3>
+              <p class="section-note">保存結果やエラーをここに表示します。</p>
+            </div>
+          </div>
+          <div id="status" class="status-message" aria-live="polite"></div>
+        </section>
+      </aside>
+    </div>
+  </main>
+  <!-- Save confirmation modal -->
+  <div id="unsaved-modal" class="modal" style="display:none;">
+    <div class="modal-panel">
+      <h3>変更を保存しますか？</h3>
+      <p>問題一覧が更新されています。変更を保存しますか？</p>
+      <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:12px;">
+        <button id="unsaved-save" class="btn btn-primary">更新</button>
+        <button id="unsaved-discard" class="btn">更新しない</button>
+        <button id="unsaved-cancel" class="btn btn-ghost">キャンセル</button>
+      </div>
+    </div>
+  </div>
+  <script src="/create_test.js"></script>
+</body>
+</html>

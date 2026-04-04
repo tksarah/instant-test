@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Task-Focus Theme — サンプル</title>
+  <link rel="stylesheet" href="teacher_theme_task_focus.css">
+  <style>body{margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial;background:#f4f6f8}</style>
+</head>
+<body>
+  <nav class="topbar">
+    <div class="brand">InstantTest — 先生用</div>
+    <div class="top-actions">
+      <button class="btn ghost">クラス切替</button>
+      <button class="btn primary">新規テスト</button>
+    </div>
+  </nav>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <ul>
+        <li class="active">ダッシュボード</li>
+        <li>テスト一覧</li>
+        <li>受講者</li>
+        <li>レポート</li>
+      </ul>
+    </aside>
+
+    <section class="content">
+      <header class="page-header">
+        <h1>タスク</h1>
+        <p class="lead">カード単位で作業を進めるワークフロー。操作は最小クリックで完了します。</p>
+      </header>
+
+      <div class="task-grid">
+        <article class="task-card">
+          <h3>テスト作成: 期末試験</h3>
+          <p class="muted">所要時間: 20分 ・ 質問: 40</p>
+          <div class="task-actions">
+            <button class="btn small">編集</button>
+            <button class="btn small outline">複製</button>
+            <button class="btn small ghost">公開</button>
+          </div>
+        </article>
+
+        <article class="task-card">
+          <h3>採点: 数学クラスA</h3>
+          <p class="muted">未採点: 12 件</p>
+          <div class="task-actions">
+            <button class="btn small primary">採点を開始</button>
+            <button class="btn small outline">エクスポート</button>
+          </div>
+        </article>
+
+        <article class="task-card">
+          <h3>配布: 小テスト（復習）</h3>
+          <p class="muted">対象クラス: 英語 — 配布済み: 0</p>
+          <div class="task-actions">
+            <button class="btn small">配布</button>
+            <button class="btn small outline">スケジュール</button>
+          </div>
+        </article>
+
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">ショートカット: <kbd>G</kbd> 採点へ &nbsp; <kbd>N</kbd> 新規作成</footer>
+</body>
+</html>

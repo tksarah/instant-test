@@ -1,0 +1,26 @@
+/* High Contrast Theme (アクセシビリティ重視) */
+body{background:#000;color:#fff}
+.hc-top{display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-bottom:3px solid #ffd400}
+.hc-brand{font-weight:800;color:#fff;font-size:18px}
+.hc-btn{background:#000;border:2px solid #fff;color:#fff;padding:8px 12px;border-radius:6px;margin-left:8px;font-weight:700}
+.hc-btn:focus{outline:3px solid #ffd400}
+.hc-btn.primary{background:#ffd400;color:#000;border-color:#ffd400}
+
+.hc-main{padding:20px}
+.hc-panel h1{margin:0 0 6px;font-size:20px}
+.hc-desc{margin:0 0 18px;color:#e6e6e6}
+
+.hc-cards{display:flex;gap:14px;flex-wrap:wrap}
+.hc-card{background:#000;border:3px solid #fff;padding:14px;border-radius:10px;min-width:180px}
+.hc-card:focus{outline:4px solid #00e676;outline-offset:4px}
+.hc-card-title{font-size:13px;color:#fff;opacity:0.95}
+.hc-card-value{font-size:28px;font-weight:800;margin:8px 0;color:#ffd400}
+.hc-action{background:#fff;color:#000;border:0;padding:8px 10px;border-radius:8px;font-weight:700}
+
+.hc-footer{padding:12px 20px;color:#ddd;border-top:2px solid #111;margin-top:18px}
+
+/* 高コントラストで視認性向上するためサイズを大きめに設定 */
+@media (prefers-contrast: more){
+  .hc-card-value{font-size:32px}
+  .hc-btn{padding:10px 14px}
+}

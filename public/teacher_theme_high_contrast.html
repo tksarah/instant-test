@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>High Contrast Theme — サンプル</title>
+  <link rel="stylesheet" href="teacher_theme_high_contrast.css">
+  <style>body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#000}</style>
+</head>
+<body>
+  <header class="hc-top">
+    <div class="hc-brand">InstantTest — 高コントラスト</div>
+    <div>
+      <button class="hc-btn">クラス</button>
+      <button class="hc-btn primary">新規</button>
+    </div>
+  </header>
+
+  <main class="hc-main">
+    <section class="hc-panel">
+      <h1>ダッシュボード</h1>
+      <p class="hc-desc">色覚多様性に配慮した高コントラスト配色。キーボード操作とスクリーンリーダーを意識。</p>
+
+      <div class="hc-cards">
+        <div class="hc-card" tabindex="0">
+          <div class="hc-card-title">未採点</div>
+          <div class="hc-card-value">12</div>
+          <button class="hc-action">採点へ</button>
+        </div>
+
+        <div class="hc-card" tabindex="0">
+          <div class="hc-card-title">公開テスト</div>
+          <div class="hc-card-value">5</div>
+          <button class="hc-action">管理</button>
+        </div>
+
+        <div class="hc-card" tabindex="0">
+          <div class="hc-card-title">アラート</div>
+          <div class="hc-card-value">1</div>
+          <button class="hc-action">確認</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="hc-footer">キーボード: <strong>Tab</strong> でカード移動 • <strong>Enter</strong> でアクション</footer>
+</body>
+</html>
