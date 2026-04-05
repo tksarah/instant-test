@@ -166,6 +166,7 @@
     const sharedStudentAccess = initialRoute.current.sharedStudentAccess;
     const sharedStudentTestId = initialRoute.current.sharedTestId;
     const sharedStudentClassId = initialRoute.current.sharedClassId;
+    const [teacherUser, setTeacherUser] = React.useState(null);
     const [classes, setClasses] = React.useState([]);
     const [tests, setTests] = React.useState([]);
       const [testQuestionCounts, setTestQuestionCounts] = React.useState({});
@@ -222,10 +223,38 @@
     // selectedUserId / selectedUserSummary removed (side-card feature disabled)
     React.useEffect(()=>{
       setInitialDataLoading(true);
-      Promise.all([
-        fetch('/api/classes').then(function(r){ return r.json(); }),
-        fetch('/api/tests').then(function(r){ return r.json(); })
-      ]).then(function(results){
+
+      if(sharedStudentAccess){
+        Promise.all([
+          fetch('/api/classes').then(function(r){ return r.json(); }),
+          fetch('/api/tests').then(function(r){ return r.json(); })
+        ]).then(function(results){
+          setClasses(results[0] || []);
+          setTests(results[1] || []);
+        }).catch(function(){
+          setMessage('初期データの読み込みに失敗しました');
+        }).finally(function(){
+          setInitialDataLoading(false);
+        });
+        return;
+      }
+
+      fetch('/api/teacher/me').then(function(r){
+        if(!r.ok){
+          var next = window.location.pathname + (window.location.search || '');
+          window.location.href = '/login.html?next=' + encodeURIComponent(next);
+          return null;
+        }
+        return r.json();
+      }).then(function(me){
+        if(!me || !me.teacher) return;
+        setTeacherUser(me.teacher);
+        return Promise.all([
+          fetch('/api/classes').then(function(r){ return r.json(); }),
+          fetch('/api/tests').then(function(r){ return r.json(); })
+        ]);
+      }).then(function(results){
+        if(!results) return;
         setClasses(results[0] || []);
         setTests(results[1] || []);
       }).catch(function(){
@@ -234,6 +263,12 @@
         setInitialDataLoading(false);
       });
     },[]);
+
+    function logoutTeacher(){
+      fetch('/api/teacher/logout', { method: 'POST' })
+        .then(function(){ window.location.href = '/login.html'; })
+        .catch(function(){ window.location.href = '/login.html'; });
+    }
 
     // fetch question counts for tests whenever tests list changes
     React.useEffect(()=>{
@@ -340,9 +375,7 @@
       try{
         const res = await fetch('/api/exams');
         const j = await res.json();
-        console.log('DEBUG: /api/exams raw response:', j);
         const arr = Array.isArray(j) ? j : (j && j.value) ? j.value : [];
-        console.log('DEBUG: parsed reports array:', arr);
         setReports(arr || []);
         setReportsPage(1);
       }catch(e){ setMessage('レポート取得エラー'); setReports([]); }
@@ -527,9 +560,9 @@
     const teacherNode = e('section', { className: 'task-page' },
       e('div', { className: 'task-page-hero compact teacher-page-hero' },
         e('div', null,
-          e('p', { className: 'eyebrow' }, 'Teacher Workspace'),
+          e('p', { className: 'eyebrow' }, '教員メニュー'),
           e('h1', null, '授業準備ダッシュボード'),
-          e('p', { className: 'lead' }, '授業中に迷わず使えるよう、作成、公開、共有、確認の順で情報を並べています。既存の API と操作は変えず、見つけやすさだけを整理しています。')
+          e('p', { className: 'lead' }, 'テストの作成、公開、共有、結果確認をまとめて行えます。')
         )
       ),
       e('div', { className: 'task-stat-grid compact' }, [
@@ -554,26 +587,13 @@
         e('section', { className: 'teacher-workspace-main' },
           e('section', { className: 'task-section-card' },
             e('div', { className: 'task-section-heading' },
-              e('div', null,
-                e('h2', null, '1. テストを作成'),
-                e('p', { className: 'section-note' }, '授業中でも最小ステップで作れるよう、必要な入力だけを先頭にまとめています。')
+              e('div', { 'data-title-icon': 'compose' },
+                e('h2', null, 'テストを作成'),
+                e('p', { className: 'section-note' }, 'クラスを選択して新しいテストを作成します。')
               ),
               e('span', { className: 'task-chip' }, selectedClass ? ('対象クラス: ' + selectedClass.name) : '対象クラス: 未選択')
             ),
-            e('div', { className: 'teacher-step-list' }, [
-              e('div', { key: 'teacher-step-1', className: 'teacher-step-item' },
-                e('strong', null, 'Step 1'),
-                e('span', null, 'クラスとテスト名を決める')
-              ),
-              e('div', { key: 'teacher-step-2', className: 'teacher-step-item' },
-                e('strong', null, 'Step 2'),
-                e('span', null, '必要なら公開とランダム出題を切り替える')
-              ),
-              e('div', { key: 'teacher-step-3', className: 'teacher-step-item' },
-                e('strong', null, 'Step 3'),
-                e('span', null, '問題編集画面へ進む')
-              )
-            ]),
+            null,
             e('div', { className: 'task-form-stack teacher-create-grid' },
               e('select', { value: selectedClass ? selectedClass.id : '', onChange: function(ev){ setSelectedClass(classes.find(function(x){ return x.id == ev.target.value; }) || null); }, 'aria-label': 'クラス選択' }, [ e('option', { key: '__empty', value: '' }, 'クラスを選択') ].concat(classes.map(function(c){ return e('option', { key: c.id, value: c.id }, c.name); })) ),
               e('input', { value: testName, onChange: function(ev){ setTestName(ev.target.value); }, placeholder: '例: 小テスト 4月1週', 'aria-label': 'テスト名' }),
@@ -583,15 +603,15 @@
               ),
               e('div', { className: 'task-inline-actions' },
                 e('button', { onClick: createTest, className: 'btn btn-primary', type: 'button' }, 'テストを作成'),
-                e('span', { className: 'teacher-inline-note' }, '作成後は問題編集画面で内容を整えられます。')
+                e('span', { className: 'teacher-inline-note' }, '作成後に問題を編集できます。')
               )
             )
           ),
           e('section', { className: 'task-section-card' },
             e('div', { className: 'task-section-heading' },
-              e('div', null,
-                e('h3', null, '2. 配布するテストを確認'),
-                e('p', { className: 'section-note' }, '公開設定、共有 QR、問題編集を一覧から続けて操作できます。')
+              e('div', { 'data-title-icon': 'list' },
+                e('h2', null, '配布テストの一覧と編集'),
+                e('p', { className: 'section-note' }, '公開設定、共有QR、問題編集を行えます。')
               ),
               e('span', { className: 'task-chip task-chip-muted' }, '共有 QR はクラス割当後に有効')
             ),
@@ -626,7 +646,7 @@
               return e('article', { key: t.id, draggable: true, onDragStart: function(ev){ onDragStartTest(ev, t); }, className: 'task-card teacher-test-card' },
                 e('div', { className: 'task-card-header' },
                   e('div', null,
-                    e('h4', { className: 'task-card-title' }, t.name),
+                    e('h4', { className: 'task-card-title', 'data-title-icon': 'test' }, t.name),
                     e('div', { className: 'teacher-card-meta-grid' },
                       e('p', { className: 'task-card-meta' }, 'クラス: ' + classNameForTest),
                       e('p', { className: 'task-card-meta' }, '問題数: ' + (testQuestionCounts[t.id] || 0) + '問')
@@ -654,9 +674,9 @@
         e('aside', { className: 'teacher-workspace-side' },
           e('section', { className: 'task-section-card' },
             e('div', { className: 'task-section-heading' },
-              e('div', null,
-                e('h2', null, '3. クラス管理'),
-                e('p', { className: 'section-note' }, 'クラス名の追加と整理を行います。')
+              e('div', { 'data-title-icon': 'classroom' },
+                e('h2', null, 'クラス管理'),
+                e('p', { className: 'section-note' }, 'クラスの追加と管理を行います。')
               )
             ),
             e('div', { className: 'task-inline-form' },
@@ -667,9 +687,9 @@
           ),
           e('section', { className: 'task-section-card' },
             e('div', { className: 'task-section-heading' },
-              e('div', null,
-                e('h3', null, '4. クラスへ割り当て'),
-                e('p', { className: 'section-note' }, 'テストカードをドラッグすると所属クラスを変更できます。')
+              e('div', { 'data-title-icon': 'assign' },
+                e('h2', null, 'クラスへ割り当て'),
+                e('p', { className: 'section-note' }, 'テストをドラッグしてクラスに割り当てます。')
               )
             ),
             e('div', { className: 'drop-zone-grid' }, classes.map(function(c){
@@ -733,7 +753,7 @@
           }
           // pass the created student into startTest to avoid relying on state update timing
           return startTest(t, j);
-        }).catch(()=> { setMessage('ログインエラー'); setStudentBusyLabel(''); });
+        }).catch(()=> { setMessage('参加処理に失敗しました'); setStudentBusyLabel(''); });
     }
 
     async function startTest(t, explicitStudent){
@@ -932,9 +952,9 @@
           studentBusyLabel ? e('div', { className: 'student-status-strip', role: 'status' }, studentBusyLabel) : null,
           e('section', { className: 'student-preview-banner student-preview-banner-entry' },
             e('div', { className: 'student-preview-banner__body' },
-              e('p', { className: 'student-preview-kicker' }, sharedStudentAccess ? 'Student Access' : 'Student Entry'),
-              e('h2', null, sharedStudentAccess ? ((sharedTest && sharedTest.name ? sharedTest.name : '配布テスト') + ' に参加') : '迷わず始められる学習画面'),
-              e('p', { className: 'student-preview-lead' }, sharedStudentAccess ? '先生から共有されたテストに、そのまま参加する画面です。必要な入力は表示名だけに絞っています。' : '参加情報、開始ボタン、進捗、結果確認までを一続きの流れで見せる構成です。学習に必要な要素だけを前に出しています。')
+              e('p', { className: 'student-preview-kicker' }, sharedStudentAccess ? '受験画面' : '受験開始'),
+              e('h2', null, sharedStudentAccess ? ((sharedTest && sharedTest.name ? sharedTest.name : '配布テスト') + ' に参加') : 'テストを選んで開始'),
+              e('p', { className: 'student-preview-lead' }, sharedStudentAccess ? '共有されたテストに参加します。表示名を入力して開始してください。' : 'クラスと表示名を入力し、受験するテストを選択してください。')
             ),
             null
           ),
@@ -942,10 +962,10 @@
             e('section', { className: 'student-preview-panel student-preview-panel-spotlight student-start-panel' },
               e('div', { className: 'student-preview-panel__header' },
                 e('div', null,
-                  e('p', { className: 'student-preview-kicker student-preview-kicker-muted' }, 'Step 1'),
+                  e('p', { className: 'student-preview-kicker student-preview-kicker-muted' }, ''),
                   e('h3', null, sharedStudentAccess ? '表示名を入力して参加' : '参加情報を入力')
                 ),
-                e('span', { className: 'student-preview-caption' }, 'まずここだけ入力')
+                e('span', { className: 'student-preview-caption' }, '必要事項を入力')
               ),
               e('div', { className: 'student-preview-form-grid' },
                 sharedStudentAccess
@@ -973,7 +993,7 @@
             e('section', { className: 'student-preview-panel' },
               e('div', { className: 'student-preview-panel__header' },
                 e('div', null,
-                  e('p', { className: 'student-preview-kicker student-preview-kicker-muted' }, 'Step 2'),
+                  e('p', { className: 'student-preview-kicker student-preview-kicker-muted' }, '受験するテスト'),
                   e('h3', null, sharedStudentAccess ? '今回のテスト' : '開始するテストを選ぶ')
                 ),
                 e('span', { className: 'student-preview-caption' }, resolvedClassId ? classLabel : (sharedStudentAccess ? '共有設定を確認中' : 'クラス選択待ち'))
@@ -1070,7 +1090,7 @@
             e('div', { className: 'student-preview-banner__body' },
               e('p', { className: 'student-preview-kicker' }, '学習ロビー'),
               e('h2', null, (student.name || studentName || '学習者') + ' さんの学習ホーム'),
-              e('p', { className: 'student-preview-lead' }, '次に始めるテストだけが分かるように、一覧と補助情報を整理しています。')
+              e('p', { className: 'student-preview-lead' }, '公開中のテストから受験する内容を選択できます。')
             ),
             null
           ),
@@ -1081,11 +1101,11 @@
                   e('p', { className: 'student-preview-kicker student-preview-kicker-muted' }, 'プロフィール'),
                   e('h3', null, '学習の準備は完了')
                 ),
-                e('span', { className: 'student-preview-caption' }, '入り口から確認し直すことも可能')
+                e('span', { className: 'student-preview-caption' }, '入力内容を確認できます')
               ),
               e('div', { className: 'student-preview-inline-note is-strong' },
                 e('strong', null, student.name || studentName || '学習者'),
-                e('span', null, '公開中の学習メニューから1つ選ぶと、そのまま学びの流れを体験できます。')
+                e('span', null, '公開中のテストから選んで受験できます。')
               ),
               e('div', { className: 'hero-actions' },
                 e('button', { onClick: function(){ goToStudentStart(); }, className: 'btn btn-ghost', type: 'button' }, '最初の画面へ戻る')
@@ -1206,9 +1226,9 @@
     const studentNode = e('section', { className: 'task-page' },
       e('div', { className: 'task-page-hero compact' },
         e('div', null,
-          e('p', { className: 'eyebrow' }, sharedStudentAccess ? 'Student Workspace' : 'Student Preview'),
-          e('h1', null, sharedStudentAccess ? 'テストに参加' : '学生画面の確認'),
-          e('p', { className: 'lead' }, sharedStudentAccess ? '先生から共有されたテストに、そのまま参加できます。表示名を入力したら開始まで迷わない構成です。' : '開始前、回答中、結果確認の 3 状態を、教育現場向けの落ち着いた導線で確認できます。')
+          e('p', { className: 'eyebrow' }, sharedStudentAccess ? '生徒画面' : '生徒画面プレビュー'),
+          e('h1', null, sharedStudentAccess ? 'テストに参加' : '生徒画面プレビュー'),
+          e('p', { className: 'lead' }, sharedStudentAccess ? '共有されたテストに参加できます。表示名を入力して開始してください。' : '生徒が利用する受験画面の表示内容を確認できます。')
         )
       ),
       e('div', { className: 'task-section-card' }, renderStudent())
@@ -1266,9 +1286,9 @@
     const reportsNode = e('section', { className: 'task-page' },
       e('div', { className: 'task-page-hero compact' },
         e('div', null,
-          e('p', { className: 'eyebrow' }, 'Teacher Insights'),
+          e('p', { className: 'eyebrow' }, '成績管理'),
           e('h1', null, '成績分析'),
-          e('p', { className: 'lead' }, 'ダッシュボードから続く分析導線です。検索、期間指定、詳細確認を1つの流れに集約しています。')
+          e('p', { className: 'lead' }, '受験結果の確認、絞り込み、詳細表示を行えます。')
         )
       ),
       e('div', { className: 'task-stat-grid compact' }, [
@@ -1290,9 +1310,9 @@
       ]),
       e('section', { className: 'task-section-card' },
         e('div', { className: 'task-section-heading' },
-          e('div', null,
+          e('div', { 'data-title-icon': 'filter' },
             e('h2', null, '絞り込み'),
-            e('p', { className: 'section-note' }, 'テスト名、生徒名、期間の条件を組み合わせて確認')
+            e('p', { className: 'section-note' }, 'テスト名、生徒名、期間で絞り込みます。')
           )
         ),
         e('div', { className: 'controls' },
@@ -1312,9 +1332,9 @@
       ),
       e('section', { className: 'task-section-card' },
         e('div', { className: 'task-section-heading' },
-          e('div', null,
+          e('div', { 'data-title-icon': 'reports' },
             e('h2', null, '結果一覧'),
-            e('p', { className: 'section-note' }, '詳細ボタンから設問単位の内訳を確認')
+            e('p', { className: 'section-note' }, '詳細から設問ごとの結果を確認できます。')
           )
         ),
         e('div', { className: 'reports-layout' },
@@ -1389,7 +1409,7 @@
         e('div', { id: 'modal-content', tabIndex: -1 },
           e('div', { className: 'share-qr-modal' },
             e('div', { className: 'share-qr-modal__meta' },
-              e('p', { className: 'student-preview-kicker student-preview-kicker-muted' }, 'Share Student Access'),
+              e('p', { className: 'student-preview-kicker student-preview-kicker-muted' }, '共有URL'),
               e('h2', null, qrShareModal.testName + ' の共有QR'),
               e('p', { className: 'section-note' }, qrShareModal.className + ' の生徒がこのURLからテストに参加できます。')
             ),
@@ -1423,10 +1443,10 @@
     }
 
     const workspaceMeta = mode === 'reports'
-      ? { eyebrow: 'Teacher Workspace', title: '成績分析', description: '結果の確認と見直し' }
+      ? { eyebrow: '教員メニュー', title: '成績分析', description: '受験結果の確認' }
       : (mode === 'student'
-        ? { eyebrow: 'Teacher Workspace', title: '学生画面の確認', description: '配布前の見え方を確認' }
-        : { eyebrow: 'Teacher Workspace', title: '授業準備', description: '作成、配布、確認を 1 画面で' });
+        ? { eyebrow: '教員メニュー', title: '生徒画面プレビュー', description: '配布前の表示確認' }
+        : { eyebrow: '教員メニュー', title: '授業準備', description: 'テストの作成と管理' });
 
     if(sharedStudentAccess){
       return e('main', { id: 'main-content', className: 'app-shell', role: 'main' },
@@ -1445,7 +1465,7 @@
             e('div', { className: 'app-brand-mark' }, 'IT'),
             e('div', { className: 'app-brand-copy' },
               e('strong', null, 'InstantTest'),
-                e('span', null, 'School-ready Learning UI')
+                e('span', null, 'テスト作成・配布・採点')
             )
           ),
           e('div', { className: 'app-workspace-context' },
@@ -1461,7 +1481,8 @@
               e('button', { onClick: ()=> setMode('reports'), className: mode==='reports' ? 'mode-tab is-active' : 'mode-tab', type: 'button' }, '成績分析')
             ),
             e('div', { className: 'mode-tab-group mode-tab-group-utility' },
-              e('button', { onClick: ()=> setMode('student'), className: mode==='student' ? 'mode-tab mode-tab-utility is-active' : 'mode-tab mode-tab-utility', type: 'button' }, 'テスト画面プレビュー')
+              e('button', { onClick: ()=> setMode('student'), className: mode==='student' ? 'mode-tab mode-tab-utility is-active' : 'mode-tab mode-tab-utility', type: 'button' }, 'テスト画面プレビュー'),
+              e('button', { onClick: logoutTeacher, className: 'mode-tab mode-tab-utility', type: 'button' }, 'ログアウト')
             )
           )
         )

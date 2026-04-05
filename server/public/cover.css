@@ -1,0 +1,38 @@
+/* cover page specific styles */
+.cover-card{
+  padding:42px 56px;
+  border-radius:30px;
+  background:linear-gradient(180deg, rgba(255,255,255,0.96), rgba(248,252,255,0.98));
+  /* stronger, larger shadow and slight uplift */
+  box-shadow:0 40px 80px rgba(15,23,42,0.14), 0 8px 24px rgba(15,23,42,0.06);
+  display:block;
+  margin:64px auto 48px auto;
+  max-width:1080px;
+  border:1px solid rgba(15,23,42,0.06);
+  transform: translateY(-6px);
+}
+.cover-grid{display:grid;grid-template-columns:1fr 360px;gap:36px;align-items:center}
+.cover-left{display:flex;flex-direction:column;gap:12px}
+.cover-left .eyebrow{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-soft);font-weight:800}
+.cover-left h1{font-size:36px;margin:0;color:var(--text-strong);line-height:1.06}
+.cover-left h1.hero-title{display:block}
+.cover-left h1.hero-title .title-main,
+.cover-left h1.hero-title .title-sub{display:block;white-space:nowrap}
+.cover-left h1.hero-title .title-main{font-weight:800}
+.cover-left h1.hero-title .title-sub{margin-top:8px;font-size:18px;color:var(--text-soft);font-weight:700}
+.cover-left .lead{color:var(--text-muted);margin-top:8px;max-width:640px;font-size:16px}
+.hero-actions{margin-top:18px;display:flex;gap:12px}
+.feature-list{list-style:disc;padding-left:20px;margin:0;color:var(--text-strong)}
+.feature-list li{margin-bottom:10px;font-weight:700;color:var(--text-strong);font-size:15px}
+.cover-right h3{margin:0 0 12px 0;font-size:16px;color:var(--text-strong)}
+.cover-right{background:linear-gradient(180deg,#ffffff,#fbfdff);padding:20px;border-radius:16px;border:1px solid rgba(15,23,42,0.04);box-shadow:0 8px 24px rgba(15,23,42,0.06)}
+.app-topbar .login-disabled{color:var(--text-soft);cursor:not-allowed;opacity:0.95;pointer-events:none;padding:8px 12px;border-radius:10px;font-weight:700;background:transparent;border:1px solid transparent}
+
+@media (max-width:960px){
+  .cover-grid{grid-template-columns:1fr}
+  .cover-right{order:2}
+  .cover-left{order:1}
+  .cover-card{padding:24px;margin:24px 16px}
+  .cover-left h1{font-size:28px}
+  .cover-left h1.hero-title .title-sub{font-size:15px}
+}

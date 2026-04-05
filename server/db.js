@@ -4,13 +4,45 @@ const dbFile = path.join(__dirname, 'data.sqlite');
 const db = new sqlite3.Database(dbFile);
 
 db.serialize(() => {
+  db.run(`CREATE TABLE IF NOT EXISTS teachers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    display_name TEXT DEFAULT '',
+    password_hash TEXT NOT NULL,
+    active INTEGER DEFAULT 1,
+    created_at TEXT
+  );`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS teacher_sessions (
+    token TEXT PRIMARY KEY,
+    teacher_id INTEGER NOT NULL,
+    created_at TEXT,
+    last_seen_at TEXT,
+    expires_at TEXT,
+    FOREIGN KEY(teacher_id) REFERENCES teachers(id)
+  );`);
+
   db.run(`CREATE TABLE IF NOT EXISTS classes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    teacher_id INTEGER,
     name TEXT NOT NULL
   );`);
 
+  // Ensure existing DB has 'teacher_id' column in classes
+  db.all("PRAGMA table_info('classes')", (err, rows) => {
+    if(err) return;
+    const hasTeacher = rows && rows.some(r => r.name === 'teacher_id');
+    if(!hasTeacher){
+      db.run('ALTER TABLE classes ADD COLUMN teacher_id INTEGER', (e) => {
+        if(e){ console.error('Failed to add teacher_id column to classes:', e.message); }
+        else { console.log('Added teacher_id column to classes'); }
+      });
+    }
+  });
+
   db.run(`CREATE TABLE IF NOT EXISTS tests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    teacher_id INTEGER,
     class_id INTEGER,
     name TEXT,
     description TEXT,
@@ -18,6 +50,18 @@ db.serialize(() => {
     randomize INTEGER DEFAULT 0,
     FOREIGN KEY(class_id) REFERENCES classes(id)
   );`);
+
+  // Ensure existing DB has 'teacher_id' column in tests
+  db.all("PRAGMA table_info('tests')", (err, rows) => {
+    if(err) return;
+    const hasTeacher = rows && rows.some(r => r.name === 'teacher_id');
+    if(!hasTeacher){
+      db.run('ALTER TABLE tests ADD COLUMN teacher_id INTEGER', (e) => {
+        if(e){ console.error('Failed to add teacher_id column to tests:', e.message); }
+        else { console.log('Added teacher_id column to tests'); }
+      });
+    }
+  });
 
   db.run(`CREATE TABLE IF NOT EXISTS questions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

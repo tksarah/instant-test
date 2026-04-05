@@ -11,20 +11,20 @@
   <main class="task-builder-shell" id="main-content">
     <header class="task-builder-header">
       <div>
-        <p class="eyebrow">Teacher Editor</p>
+        <p class="eyebrow">テスト編集</p>
         <h1>テスト作成</h1>
-        <p class="section-note">基本情報、問題入力、保存確認の順で、授業中でも迷わず進められる構成に整理しています。</p>
+        <p class="section-note">テスト情報を確認し、問題を作成します。</p>
       </div>
       <div class="task-builder-header__actions">
-        <a href="/" class="btn btn-ghost">ダッシュボードへ戻る</a>
+        <a id="dashboard-link" href="/app.html" class="btn btn-ghost">ダッシュボードへ戻る</a>
       </div>
     </header>
 
     <section class="task-page-hero compact">
       <div>
-        <p class="eyebrow">Step 1</p>
-        <h2>基本情報を確認</h2>
-        <p class="lead">テスト名と所属クラスを確認したら、そのまま問題入力へ進みます。</p>
+        <p class="eyebrow"></p>
+        <h2>基本情報</h2>
+        <p class="lead">テスト名とクラスを確認してから、問題を追加してください。</p>
       </div>
     </section>
 
@@ -46,16 +46,63 @@
             <legend>作成方法</legend>
             <div class="task-toggle-row">
               <label class="task-toggle"><input type="radio" name="create-mode" value="manual" checked> <span>手動で作成</span></label>
-              <label class="task-toggle"><input type="radio" name="create-mode" value="auto" disabled> <span>自動で作成（未実装）</span></label>
+              <label class="task-toggle"><input type="radio" name="create-mode" value="auto"> <span>自動で作成</span></label>
             </div>
           </fieldset>
         </section>
 
-        <section class="task-section-card">
+        <section class="task-section-card" id="auto-create-section" style="display:none;">
           <div class="task-section-heading">
-            <div>
-              <h2>Step 2. 問題を入力</h2>
-              <p class="section-note">空欄からすぐ入力できる構成です。問題文と選択肢だけに集中できるよう整理しています。</p>
+            <div data-title-icon="automation">
+              <h2>自動で作成</h2>
+              <p class="section-note">指定した条件で問題を自動生成します。</p>
+            </div>
+          </div>
+          <div class="task-form-stack">
+            <div class="auto-row">
+              <div class="auto-row__item auto-row__item--wide">
+                <label>問題数（最大10）
+                  <input id="auto-question-count" type="number" min="1" max="10" value="5">
+                </label>
+              </div>
+              <div class="auto-row__item">
+                <label>難易度
+                  <select id="auto-difficulty">
+                    <option value="easy">やさしい</option>
+                    <option value="normal" selected>ふつう</option>
+                    <option value="hard">むずかしい</option>
+                  </select>
+                </label>
+              </div>
+              <div class="auto-row__item">
+                <label>選択数
+                  <select id="auto-choice-count">
+                    <option value="2">2</option>
+                    <option value="3">3</option>
+                    <option value="4" selected>4</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+            <label>授業内容（最大2000文字）
+              <textarea id="auto-class-description" rows="6" maxlength="2000" placeholder="授業内容を2000文字以内で入力してください"></textarea>
+            </label>
+            <label id="auto-multiple-toggle" class="task-toggle" style="display:flex; width:fit-content;">
+              <input id="auto-allow-multiple" type="checkbox">
+              <span>4択時に複数正答を許可する</span>
+            </label>
+            <div style="display:flex; gap:8px; justify-content:flex-end;">
+              <button id="auto-generate" class="btn btn-primary" type="button">問題を自動生成</button>
+              <button id="auto-cancel" class="btn btn-ghost" type="button">手動に戻す</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="task-section-card" id="manual-editor">
+            <div class="task-section-heading">
+            <div data-title-icon="editor">
+              <h2>問題を入力</h2>
+              <p class="section-note">問題文と選択肢を入力して追加します。</p>
             </div>
           </div>
           <div class="task-warning">
@@ -73,7 +120,7 @@
                 <button id="set-four-choices" class="btn btn-small btn-ghost" type="button">4択</button>
               </div>
             </div>
-            <h3 id="editor-title">新しい問題を作成</h3>
+            <h3 id="editor-title">問題を作成</h3>
             <label>問題文
               <textarea id="question-text" rows="4" placeholder="問題文を入力"></textarea>
             </label>
@@ -83,7 +130,7 @@
             </div>
             <div id="choices-editor">
               <div class="task-section-heading">
-                <div>
+                <div data-title-icon="choices">
                   <h4>選択肢</h4>
                   <p class="section-note">少なくとも 2 つ必要です。正解は 1 つ以上設定してください。</p>
                 </div>
@@ -96,7 +143,7 @@
               <button id="clear-editor" class="btn btn-ghost" type="button">エディタをクリア</button>
             </div>
             <div style="display:flex; justify-content:flex-end; margin-top:12px;">
-              <button id="save-test" class="btn btn-primary" type="button">Step 3. 保存する</button>
+              <button id="save-test" class="btn btn-primary" type="button">保存</button>
             </div>
           </div>
         </section>
@@ -105,19 +152,19 @@
       <aside class="task-builder-side">
         <section class="task-section-card">
           <div class="task-section-heading">
-            <div>
+            <div data-title-icon="list">
               <h2>問題一覧</h2>
-              <p class="section-note">入力済みの問題を上から確認し、編集・削除できます。</p>
+              <p class="section-note">登録した問題を確認し、編集・削除できます。</p>
             </div>
           </div>
-          <div id="questions-list">（問題がありません）</div>
+          <div id="questions-list">問題はまだありません</div>
         </section>
 
         <section class="task-section-card">
           <div class="task-section-heading">
-            <div>
+            <div data-title-icon="status">
               <h3>保存ステータス</h3>
-              <p class="section-note">保存結果、入力不足、通信エラーをここに表示します。</p>
+              <p class="section-note">保存結果やエラーを表示します。</p>
             </div>
           </div>
           <div id="status" class="status-message" aria-live="polite"></div>
@@ -128,12 +175,10 @@
   <!-- Save confirmation modal -->
   <div id="unsaved-modal" class="modal" style="display:none;">
     <div class="modal-panel">
-      <h3>変更を保存しますか？</h3>
-      <p>問題一覧が更新されています。変更を保存しますか？</p>
+      <h3>保存してください</h3>
+      <p>問題の追加や削除、編集中の内容がある場合は、先に内容を反映してから「保存」ボタンを押してください。</p>
       <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:12px;">
-        <button id="unsaved-save" class="btn btn-primary">更新</button>
-        <button id="unsaved-discard" class="btn">更新しない</button>
-        <button id="unsaved-cancel" class="btn btn-ghost">キャンセル</button>
+        <button id="unsaved-ok" class="btn btn-primary">閉じる</button>
       </div>
     </div>
   </div>

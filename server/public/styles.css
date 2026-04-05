@@ -214,6 +214,46 @@ legend{padding:0 8px;color:var(--text-strong);font-weight:700}
 
 .task-section-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:16px}
 .task-section-heading h2,.task-section-heading h3{margin-bottom:4px}
+
+/* Add contextual icons to section headings and ensure subtitle stays below the title */
+.task-section-heading > div{
+  display:grid;
+  grid-template-columns:40px 1fr;
+  gap:12px;
+  align-items:start;
+}
+.task-section-heading > div::before{
+  content:'';
+  display:block;
+  width:40px;
+  height:40px;
+  border-radius:12px;
+  background:var(--color-accent-soft);
+  background-position:center;
+  background-repeat:no-repeat;
+  background-size:18px 18px;
+  border:1px solid rgba(79,121,164,0.16);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.7);
+  grid-column:1;
+}
+.task-section-heading > div > h2,
+.task-section-heading > div > h3,
+.task-section-heading > div > h4,
+.task-section-heading > div > p{
+  grid-column:2;
+}
+.task-section-heading > div > h2,.task-section-heading > div > h3,.task-section-heading > div > h4{margin:0;font-size:31px;line-height:1.15;color:var(--color-main)}
+.task-section-heading > div > p{margin-top:1.5px}
+.task-section-heading > div[data-title-icon='compose']::before{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232c4a67' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 20h9'/%3E%3Cpath d='M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z'/%3E%3C/svg%3E")}
+.task-section-heading > div[data-title-icon='list']::before{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232c4a67' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 6h11'/%3E%3Cpath d='M9 12h11'/%3E%3Cpath d='M9 18h11'/%3E%3Cpath d='M4 6h.01'/%3E%3Cpath d='M4 12h.01'/%3E%3Cpath d='M4 18h.01'/%3E%3C/svg%3E")}
+.task-section-heading > div[data-title-icon='classroom']::before{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232c4a67' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2'/%3E%3Ccircle cx='9' cy='7' r='4'/%3E%3Cpath d='M22 21v-2a4 4 0 0 0-3-3.87'/%3E%3Cpath d='M16 3.13a4 4 0 0 1 0 7.75'/%3E%3C/svg%3E")}
+.task-section-heading > div[data-title-icon='assign']::before{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232c4a67' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 7h13'/%3E%3Cpath d='m13 3 4 4-4 4'/%3E%3Cpath d='M21 17H8'/%3E%3Cpath d='m11 21-4-4 4-4'/%3E%3C/svg%3E")}
+.task-section-heading > div[data-title-icon='filter']::before{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232c4a67' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 5h18l-7 8v5l-4 2v-7Z'/%3E%3C/svg%3E")}
+.task-section-heading > div[data-title-icon='reports']::before{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232c4a67' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 20h18'/%3E%3Cpath d='M7 20v-5'/%3E%3Cpath d='M12 20V10'/%3E%3Cpath d='M17 20V4'/%3E%3C/svg%3E")}
+.task-section-heading > div[data-title-icon='automation']::before{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232c4a67' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m12 3 1.9 4.7L18.5 9.5l-4.6 1.8L12 16l-1.9-4.7L5.5 9.5l4.6-1.8Z'/%3E%3Cpath d='m19 14 .9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9Z'/%3E%3C/svg%3E")}
+.task-section-heading > div[data-title-icon='editor']::before{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232c4a67' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 20h9'/%3E%3Cpath d='M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z'/%3E%3C/svg%3E")}
+.task-section-heading > div[data-title-icon='choices']::before{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232c4a67' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='2'/%3E%3Cpath d='m9 12 2 2 4-4'/%3E%3C/svg%3E")}
+.task-section-heading > div[data-title-icon='status']::before{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232c4a67' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 8h.01'/%3E%3Cpath d='M11 12h1v4h1'/%3E%3C/svg%3E")}
 .section-note{font-size:13px;color:var(--text-muted)}
 
 .task-inline-form,.task-inline-actions,.task-toggle-row,.task-card-controls,.task-card-footer{display:flex;gap:10px;flex-wrap:wrap}
@@ -289,7 +329,26 @@ legend{padding:0 8px;color:var(--text-strong);font-weight:700}
   box-shadow:var(--shadow-card);
 }
 .task-card-header{display:flex;justify-content:space-between;align-items:flex-start;gap:14px}
-.task-card-title{font-size:18px;margin-bottom:4px}
+.task-card-title{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  font-size:25px;
+  margin-bottom:1px;
+  font-weight:800;
+  line-height:1.2;
+  color:var(--color-main);
+}
+.task-card-title::before{
+  content:'';
+  width:14px;
+  height:14px;
+  flex:0 0 14px;
+  background-repeat:no-repeat;
+  background-position:center;
+  background-size:14px 14px;
+}
+.task-card-title[data-title-icon='test']::before{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232c4a67' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z'/%3E%3Cpath d='M14 3v5h5'/%3E%3Cpath d='M9 13h6'/%3E%3Cpath d='M9 17h4'/%3E%3C/svg%3E")}
 .task-card-meta{font-size:13px;color:var(--text-muted)}
 .task-badges{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 .badge{
@@ -1313,3 +1372,10 @@ kbd{background:#f7f9fb;border:1px solid var(--border-soft);box-shadow:none}
   .student-feedback-card,
   .task-card{padding:12px}
 }
+
+/* Auto-create form: three controls in one row */
+.auto-row{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:6px}
+.auto-row__item{flex:1;min-width:120px}
+.auto-row__item--wide{flex:1.6;min-width:160px}
+.auto-row label{display:block;width:100%}
+@media (max-width:720px){.auto-row{flex-direction:column}}
