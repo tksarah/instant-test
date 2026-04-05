@@ -392,6 +392,20 @@ legend{padding:0 8px;color:var(--text-strong);font-weight:700}
     radial-gradient(circle at bottom left, rgba(255,221,166,0.22), transparent 34%),
     linear-gradient(135deg, #2b635a 0%, #4f8f7d 52%, #d0b46b 100%);
 }
+/* Contrast helper: ensure ghost buttons using this modifier are readable on any hero */
+.student-summary-hero .btn-ghost.btn-ghost-contrast,
+.student-preview-banner .btn-ghost.btn-ghost-contrast,
+.student-preview-banner-loggedin .btn-ghost.btn-ghost-contrast{
+  color: var(--text-strong) !important;
+  border-color: var(--border-soft) !important;
+  background: transparent !important;
+}
+.student-summary-hero .btn-ghost.btn-ghost-contrast:hover,
+.student-preview-banner .btn-ghost.btn-ghost-contrast:hover,
+.student-preview-banner-loggedin .btn-ghost.btn-ghost-contrast:hover{
+  background: rgba(24,50,74,0.04) !important;
+  border-color: rgba(24,50,74,0.08) !important;
+}
 .student-preview-banner__body,
 .student-summary-hero__main{display:grid;gap:12px;align-content:start}
 .student-preview-kicker{margin:0;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,0.72);font-weight:800}
@@ -660,6 +674,41 @@ legend{padding:0 8px;color:var(--text-strong);font-weight:700}
 .student-exam-actions{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
 .student-action-hint{font-size:13px;color:var(--text-muted)}
 
+/* utility: push element to the right inside .student-exam-actions */
+.student-exam-actions .align-right{margin-left:auto}
+
+/* Review button: centered and distinct color */
+.btn-review{
+  background:var(--color-main);
+  color:#fff;
+  border-color:var(--color-main);
+}
+.btn-review:hover{background:var(--color-accent-strong)}
+.btn-center{margin:0 auto}
+
+/* Prominent selection-type label shown in exam topbar */
+.student-exam-topbar .student-preview-kicker,
+.student-exam-topbar .student-preview-kicker-muted{
+  font-size:14px; /* slightly larger */
+  color:var(--color-main);
+  font-weight:800;
+  letter-spacing:0.08em;
+  text-transform:none;
+}
+
+/* Pill-style label for selection type in exam topbar */
+.student-exam-topbar .student-preview-kicker,
+.student-exam-topbar .student-preview-kicker-muted{
+  background:var(--color-accent-soft);
+  padding:6px 12px;
+  border-radius:999px;
+  color:var(--color-accent-strong);
+  display:inline-block;
+  font-weight:800;
+  letter-spacing:0.06em;
+  font-size:14px;
+}
+
 .student-preview-banner,
 .student-summary-hero,
 .student-preview-panel,
@@ -790,7 +839,7 @@ h1,h2,h3,h4{
   letter-spacing:0.01em;
 }
 
-.container,.app-shell,.task-builder-shell{padding:24px 24px 40px}
+.container,.app-shell,.task-builder-shell{padding:20px 20px 32px}
 
 .box,
 .task-section-card,
@@ -839,13 +888,18 @@ fieldset,
 }
 
 .btn{
-  min-height:40px;
-  padding:8px 16px;
+  min-height:36px;
+  padding:6px 12px;
   background:#f1f4f7;
   border:1px solid var(--border-soft);
   color:var(--text-strong);
   font-weight:700;
   box-shadow:none;
+}
+
+.btn-small{
+  min-height:32px;
+  padding:4px 10px;
 }
 
 .btn:hover{
@@ -888,7 +942,7 @@ label{font-size:13px;color:var(--text-muted);font-weight:500}
 
 .app-topbar,
 .task-builder-header{
-  padding:16px 24px;
+  padding:14px 18px;
   background:#fff;
   border:1px solid var(--border-soft);
   border-radius:6px;
@@ -935,7 +989,7 @@ label{font-size:13px;color:var(--text-muted);font-weight:500}
 .teacher-status-strip,
 .student-status-strip{
   margin-bottom:16px;
-  padding:12px 16px;
+  padding:10px 14px;
   border:1px solid #cfd8e3;
   border-left:4px solid var(--color-accent);
   border-radius:6px;
@@ -948,7 +1002,7 @@ label{font-size:13px;color:var(--text-muted);font-weight:500}
 .student-preview-banner,
 .student-summary-hero,
 .student-exam-panel-emphasis{
-  padding:24px;
+  padding:18px 20px;
   border-radius:6px;
   border:1px solid var(--border-soft);
   border-left:4px solid var(--color-main);
@@ -988,10 +1042,10 @@ label{font-size:13px;color:var(--text-muted);font-weight:500}
 }
 
 .task-stat-grid,
-.task-stat-grid.compact{gap:16px}
+.task-stat-grid.compact{gap:12px}
 
 .task-stat-card{
-  padding:16px;
+  padding:12px 14px;
   background:#fff;
   border:1px solid var(--border-soft);
 }
@@ -1001,7 +1055,7 @@ label{font-size:13px;color:var(--text-muted);font-weight:500}
 .teacher-workspace-grid{
   display:grid;
   grid-template-columns:minmax(0,1.5fr) minmax(320px,0.85fr);
-  gap:16px;
+  gap:12px;
   align-items:start;
 }
 
@@ -1009,19 +1063,19 @@ label{font-size:13px;color:var(--text-muted);font-weight:500}
 .teacher-workspace-side,
 .student-preview-shell,
 .student-exam-sidebar,
-.student-exam-main{display:grid;gap:16px}
+.student-exam-main{display:grid;gap:12px}
 
 .teacher-step-list{
   display:grid;
   grid-template-columns:repeat(3,minmax(0,1fr));
   gap:8px;
-  margin-bottom:16px;
+  margin-bottom:12px;
 }
 
 .teacher-step-item{
   display:grid;
   gap:4px;
-  padding:12px;
+  padding:10px;
   border:1px solid var(--border-soft);
   border-radius:6px;
   background:var(--bg-soft);
@@ -1030,7 +1084,7 @@ label{font-size:13px;color:var(--text-muted);font-weight:500}
 .teacher-step-item strong{color:var(--color-main);font-size:12px}
 .teacher-step-item span{font-size:13px;color:var(--text-muted)}
 
-.teacher-create-grid{gap:16px}
+.teacher-create-grid{gap:12px}
 
 .teacher-inline-note{
   display:inline-flex;
@@ -1040,20 +1094,20 @@ label{font-size:13px;color:var(--text-muted);font-weight:500}
 }
 
 .task-section-card{
-  padding:24px;
+  padding:18px;
   background:#fff;
   border:1px solid var(--border-soft);
 }
 
-.task-section-heading{margin-bottom:16px}
+.task-section-heading{margin-bottom:12px}
 
 .task-chip,
 .badge,
 .student-pill,
 .student-status-pill,
 .student-summary-card__index{
-  min-height:30px;
-  padding:4px 10px;
+  min-height:26px;
+  padding:2px 8px;
   border:1px solid var(--border-soft);
   background:#f5f7fa;
   color:var(--color-main);
@@ -1071,13 +1125,13 @@ label{font-size:13px;color:var(--text-muted);font-weight:500}
 .student-exam-panel,
 .student-question-card,
 .student-feedback-card{
-  padding:16px;
+  padding:12px 14px;
   background:#fff;
   border:1px solid var(--border-soft);
 }
 
 .teacher-test-card{
-  gap:16px;
+  gap:12px;
 }
 
 .teacher-card-meta-grid{
@@ -1088,7 +1142,7 @@ label{font-size:13px;color:var(--text-muted);font-weight:500}
 
 .teacher-card-footer{
   display:flex;
-  gap:8px;
+  gap:6px;
   flex-wrap:wrap;
 }
 
@@ -1097,7 +1151,7 @@ label{font-size:13px;color:var(--text-muted);font-weight:500}
 .student-preview-panel__header h3{color:var(--color-main)}
 
 .drop-zone{
-  min-height:64px;
+  min-height:56px;
   justify-content:center;
   background:var(--bg-soft);
   border:1px dashed #b9c8d8;
@@ -1125,13 +1179,13 @@ label{font-size:13px;color:var(--text-muted);font-weight:500}
 }
 
 .student-preview-grid,
-.student-entry-grid{grid-template-columns:minmax(0,0.9fr) minmax(0,1.1fr);gap:16px}
+.student-entry-grid{grid-template-columns:minmax(0,0.9fr) minmax(0,1.1fr);gap:12px}
 
 .student-preview-banner__stats,
-.student-summary-stats{grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.student-summary-stats{grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
 
 .student-preview-stat{
-  padding:16px;
+  padding:12px 14px;
   background:var(--bg-soft);
   border:1px solid var(--border-soft);
 }
@@ -1158,7 +1212,7 @@ label{font-size:13px;color:var(--text-muted);font-weight:500}
 .student-score-orb__eyebrow,
 .student-score-orb__sub{color:var(--text-soft)}
 
-.student-exam-shell{grid-template-columns:280px minmax(0,1fr);gap:16px}
+.student-exam-shell{grid-template-columns:280px minmax(0,1fr);gap:12px}
 
 .student-exam-panel-emphasis{
   border-left-color:var(--color-accent);
@@ -1168,7 +1222,7 @@ label{font-size:13px;color:var(--text-muted);font-weight:500}
 .student-exam-progress-bar span{background:var(--color-accent)}
 
 .student-choice-option{
-  padding:16px;
+  padding:12px 14px;
   background:#fff;
   border:1px solid var(--border-soft);
   box-shadow:none;
@@ -1257,5 +1311,5 @@ kbd{background:#f7f9fb;border:1px solid var(--border-soft);box-shadow:none}
   .student-exam-panel,
   .student-question-card,
   .student-feedback-card,
-  .task-card{padding:16px}
+  .task-card{padding:12px}
 }

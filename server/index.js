@@ -589,7 +589,7 @@ app.post('/api/questions/:id/choices', (req, res) => {
 
 // Fallback to frontend
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  res.sendFile(path.join(__dirname, 'public', 'app.html'));
 });
 
 const port = process.env.PORT || 3000;

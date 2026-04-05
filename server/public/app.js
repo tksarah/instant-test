@@ -936,23 +936,7 @@
               e('h2', null, sharedStudentAccess ? ((sharedTest && sharedTest.name ? sharedTest.name : '配布テスト') + ' に参加') : '迷わず始められる学習画面'),
               e('p', { className: 'student-preview-lead' }, sharedStudentAccess ? '先生から共有されたテストに、そのまま参加する画面です。必要な入力は表示名だけに絞っています。' : '参加情報、開始ボタン、進捗、結果確認までを一続きの流れで見せる構成です。学習に必要な要素だけを前に出しています。')
             ),
-            e('div', { className: 'student-preview-banner__stats' }, [
-              e('article', { key: 'intro-tests', className: 'student-preview-stat' },
-                e('span', { className: 'student-preview-stat__label' }, sharedStudentAccess ? '対象テスト' : '公開テスト'),
-                e('strong', { className: 'student-preview-stat__value' }, String(availableTests.length)),
-                e('span', { className: 'student-preview-stat__note' }, resolvedClassId ? (classLabel + 'で表示中') : (sharedStudentAccess ? '共有設定を確認中' : 'クラス選択後に表示'))
-              ),
-              e('article', { key: 'intro-feedback', className: 'student-preview-stat' },
-                e('span', { className: 'student-preview-stat__label' }, '回答導線'),
-                e('strong', { className: 'student-preview-stat__value' }, '1画面集中'),
-                e('span', { className: 'student-preview-stat__note' }, '現在の操作だけを表示')
-              ),
-              e('article', { key: 'intro-summary', className: 'student-preview-stat' },
-                e('span', { className: 'student-preview-stat__label' }, '結果確認'),
-                e('strong', { className: 'student-preview-stat__value' }, '見直し可'),
-                e('span', { className: 'student-preview-stat__note' }, '問題ごとに正答と解説を確認')
-              )
-            ])
+            null
           ),
           e('div', { className: 'student-preview-grid student-entry-grid' },
             e('section', { className: 'student-preview-panel student-preview-panel-spotlight student-start-panel' },
@@ -1010,7 +994,7 @@
                 e('p', { className: 'student-preview-lead' }, summaryPercent >= 80 ? '理解できている内容が多い状態です。気になった問題だけを短く見直せます。' : (summaryPercent >= 60 ? '正解できた内容と迷った内容が分かるように整理しています。' : '見直すべき問題がすぐ分かるように、自分の答えと正答を並べています。')),
                 e('div', { className: 'hero-actions' },
                   e('button', { onClick: sharedStudentAccess ? function(){ goToStudentStart(); } : clearStudentSummary, className: 'btn btn-primary', type: 'button' }, sharedStudentAccess ? 'もう一度このテストを受ける' : '別の学習を見る'),
-                  sharedStudentAccess ? null : e('button', { onClick: function(){ goToStudentStart(); }, className: 'btn btn-ghost', type: 'button' }, '最初から確認し直す')
+                  sharedStudentAccess ? null : e('button', { onClick: function(){ goToStudentStart(); }, className: 'btn btn-ghost btn-ghost-contrast', type: 'button' }, '最初から確認し直す')
                 )
               ),
               e('div', { className: 'student-score-orb', style: { '--score-angle': summaryPercent + '%' } },
@@ -1088,23 +1072,7 @@
               e('h2', null, (student.name || studentName || '学習者') + ' さんの学習ホーム'),
               e('p', { className: 'student-preview-lead' }, '次に始めるテストだけが分かるように、一覧と補助情報を整理しています。')
             ),
-            e('div', { className: 'student-preview-banner__stats' }, [
-              e('article', { key: 'ready-class', className: 'student-preview-stat' },
-                e('span', { className: 'student-preview-stat__label' }, 'クラス'),
-                e('strong', { className: 'student-preview-stat__value' }, classLabel),
-                e('span', { className: 'student-preview-stat__note' }, '現在の公開テストを表示')
-              ),
-              e('article', { key: 'ready-tests', className: 'student-preview-stat' },
-                e('span', { className: 'student-preview-stat__label' }, '候補数'),
-                e('strong', { className: 'student-preview-stat__value' }, String(availableTests.length)),
-                e('span', { className: 'student-preview-stat__note' }, 'そのまま開始可能')
-              ),
-              e('article', { key: 'ready-flow', className: 'student-preview-stat' },
-                e('span', { className: 'student-preview-stat__label' }, '操作'),
-                e('strong', { className: 'student-preview-stat__value' }, 'すぐ開始'),
-                e('span', { className: 'student-preview-stat__note' }, '選択したらそのまま回答へ進行')
-              )
-            ])
+            null
           ),
           e('div', { className: 'student-preview-grid' },
             e('section', { className: 'student-preview-panel student-preview-panel-spotlight' },
@@ -1223,7 +1191,9 @@
               ) : null
             ),
             e('div', { className: 'student-exam-actions' },
-              e('button', { onClick: function(){ nextQuestion(); }, className: 'btn btn-primary', type: 'button' }, currentIndex + 1 < currentQuestions.length ? 'つぎの問題へ' : 'ふりかえりを見る')
+              currentIndex + 1 < currentQuestions.length
+                ? e('button', { onClick: function(){ nextQuestion(); }, className: 'btn btn-primary align-right', type: 'button' }, '次の問題へ')
+                : e('button', { onClick: function(){ nextQuestion(); }, className: 'btn btn-review btn-center', type: 'button' }, 'ふりかえりを見る')
             )
           ) : e('div', { className: 'student-exam-actions' },
             e('span', { className: 'student-action-hint' }, currentSelection.length ? 'この答えでチェックします。' : '1つ以上選ぶとチェックできます。'),
