@@ -10,6 +10,7 @@
   let lastSavedClassId = '';
   let lastSavedQuestions = [];
   let editingTestId = null;
+  let editingTestMeta = { description: '', public: 0, randomize: 0 };
   const persistedDeletedQuestionIds = new Set();
   const MAX_QUESTIONS = 100;
   const MIN_CHOICES = 2;
@@ -230,7 +231,17 @@
       const q = state.questions[i];
       const idx = i; // global index in state.questions
       const li = document.createElement('li');
-      const qdiv = document.createElement('div'); qdiv.className = 'question-list-card__title'; qdiv.appendChild(document.createTextNode(q.text));
+      const qdiv = document.createElement('div'); qdiv.className = 'question-list-card__title';
+      // 表示は先頭20文字のみ（末尾に省略記号）。フルテキストはツールチップとクリックで確認可能。
+      const maxLen = 15;
+      const rawText = String(q.text || '');
+      const displayText = rawText.length > maxLen ? rawText.slice(0, maxLen) + '…' : rawText;
+      qdiv.textContent = displayText;
+      // title属性でホバー時に全文を表示
+      qdiv.title = rawText;
+      // クリックで全文をモーダルまたはダイアログで表示（簡易実装：alert）
+      qdiv.style.cursor = 'pointer';
+      qdiv.addEventListener('click', function(){ if(rawText) { alert(rawText); } });
       const meta = document.createElement('div'); meta.className = 'task-helper-text'; meta.appendChild(document.createTextNode('選択肢: ' + (q.choices ? q.choices.length : 0) + ' / ' + ((q.type || 'single') === 'multiple' ? '複数正解' : '単一正解')));
       const btnEdit = document.createElement('button'); btnEdit.className='btn btn-small btn-primary'; btnEdit.type='button'; btnEdit.textContent='編集'; btnEdit.addEventListener('click', function(){ editQuestion(idx); });
       const btnDel = document.createElement('button'); btnDel.className='btn btn-small btn-ghost'; btnDel.type='button'; btnDel.textContent='削除'; btnDel.addEventListener('click', function(){ deleteQuestion(idx); });
@@ -378,7 +389,7 @@
     try{
       if(editingTestId){
         // update existing test
-        await requestJson('/api/tests/' + encodeURIComponent(editingTestId), { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name: name, description: '', public: 0, randomize: 0, class_id: classId || null }) }, 'テスト更新に失敗しました');
+        await requestJson('/api/tests/' + encodeURIComponent(editingTestId), { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name: name, description: editingTestMeta.description || '', public: editingTestMeta.public ? 1 : 0, randomize: editingTestMeta.randomize ? 1 : 0, class_id: classId || null }) }, 'テスト更新に失敗しました');
         // process questions: update existing ones, create new ones
         for(const q of state.questions){
           if(q.id){
@@ -485,7 +496,15 @@
           const tr = await fetch('/api/tests');
           const allTests = await tr.json().catch(()=>[]);
           const test = (allTests || []).find(t => String(t.id) === String(presetTestId));
-          if(test){ if(!presetName) el('test-name').value = test.name || ''; if(!presetClass){ const sel = el('class-select'); sel.value = test.class_id || ''; } }
+          if(test){
+            editingTestMeta = {
+              description: test.description || '',
+              public: test.public ? 1 : 0,
+              randomize: test.randomize ? 1 : 0
+            };
+            if(!presetName) el('test-name').value = test.name || '';
+            if(!presetClass){ const sel = el('class-select'); sel.value = test.class_id || ''; }
+          }
           // fetch questions
           const qr = await fetch('/api/tests/' + encodeURIComponent(presetTestId) + '/questions');
           const qjson = await qr.json().catch(()=>[]);

@@ -211,6 +211,75 @@ function ensureTeacherOwnsTest(req, res, testId, cb){
   });
 }
 
+function buildTestSummaryForStudent(testId, studentId, sessionId){
+  return new Promise((resolve, reject) => {
+    db.all('SELECT * FROM questions WHERE test_id=?', [testId], (err, questions) => {
+      if(err) return reject(err);
+      const qids = (questions || []).map(q => q.id);
+      if(qids.length === 0){
+        return resolve({ total_points: 0, earned_points: 0, details: [] });
+      }
+      db.all(`SELECT * FROM choices WHERE question_id IN (${qids.join(',')})`, (err2, choices) => {
+        if(err2) return reject(err2);
+        const choicesMap = {};
+        (choices || []).forEach(c => {
+          choicesMap[c.question_id] = choicesMap[c.question_id] || [];
+          choicesMap[c.question_id].push(c);
+        });
+        const fetchAnswers = sessionId
+          ? function(done){
+              db.all('SELECT * FROM student_answers WHERE session_id=?', [sessionId], (sessionErr, sessionAnswers) => {
+                if(sessionErr) return done(sessionErr);
+                if(sessionAnswers && sessionAnswers.length > 0){
+                  return done(null, sessionAnswers);
+                }
+                db.all('SELECT * FROM student_answers WHERE student_id=? AND test_id=?', [studentId, testId], done);
+              });
+            }
+          : function(done){
+              db.all('SELECT * FROM student_answers WHERE student_id=? AND test_id=?', [studentId, testId], done);
+            };
+        fetchAnswers((err3, answers) => {
+          if(err3) return reject(err3);
+          const answersMap = {};
+          (answers || []).forEach(a => {
+            answersMap[a.question_id] = answersMap[a.question_id] || [];
+            answersMap[a.question_id].push(a);
+          });
+          let total = 0;
+          let earned = 0;
+          const details = (questions || []).map(q => {
+            const qChoices = choicesMap[q.id] || [];
+            const correctIds = qChoices.filter(c => c.is_correct === 1 || c.is_correct === true).map(c => c.id);
+            const given = (answersMap[q.id] || []).map(a => a.choice_id).filter(x => x !== null && typeof x !== 'undefined');
+            const uniqueGiven = Array.from(new Set(given));
+            const qTotal = q.points || 1;
+            total += qTotal;
+            let correct = false;
+            if(uniqueGiven.length > 0){
+              const submittedSet = new Set(uniqueGiven.map(x => parseInt(x, 10)));
+              const correctSet = new Set(correctIds.map(x => parseInt(x, 10)));
+              if(submittedSet.size === correctSet.size && [...submittedSet].every(x => correctSet.has(x))){
+                correct = true;
+              }
+            }
+            if(correct) earned += qTotal;
+            return {
+              question_id: q.id,
+              text: q.text,
+              points: qTotal,
+              correct: correct,
+              given_choice_ids: uniqueGiven,
+              correct_choice_ids: correctIds
+            };
+          });
+          resolve({ total_points: total, earned_points: earned, details: details });
+        });
+      });
+    });
+  });
+}
+
 function ensurePublicTestAccess(res, testId, cb){
   db.get('SELECT * FROM tests WHERE id=? AND public=1', [testId], (err, row) => {
     if(err) return res.status(500).json({ error: err.message });
@@ -303,6 +372,21 @@ app.put('/api/admin/teachers/:id/password', requireAdmin, (req, res) => {
   db.run('UPDATE teachers SET password_hash=? WHERE id=?', [hash, id], function(err){
     if(err) return res.status(500).json({ error: err.message });
     res.json({ id: Number(id), updated: this.changes > 0 });
+  });
+});
+
+// Update teacher display name
+app.patch('/api/admin/teachers/:id', requireAdmin, (req, res) => {
+  const id = req.params.id;
+  const { display_name } = req.body || {};
+  const dn = typeof display_name === 'string' ? display_name.trim() : '';
+  db.run('UPDATE teachers SET display_name=? WHERE id=?', [dn, id], function(err){
+    if(err) return res.status(500).json({ error: err.message });
+    if(!this.changes) return res.status(404).json({ error: 'not_found' });
+    db.get('SELECT id, username, display_name, active, created_at FROM teachers WHERE id=?', [id], (e, row) => {
+      if(e) return res.status(500).json({ error: e.message });
+      res.json(row || {});
+    });
   });
 });
 
@@ -769,48 +853,21 @@ app.get('/api/tests/:testId/summary', (req, res) => {
   const sessionId = req.query.session_id;
   if(!studentId) return res.status(400).json({ error: 'student_id required' });
   ensurePublicTestAccess(res, testId, () => {
-  // fetch questions and choices
-  db.all('SELECT * FROM questions WHERE test_id=?', [testId], (err, questions)=>{
-    if(err) return res.status(500).json({ error: err.message });
-    const qids = questions.map(q=>q.id);
-    if(qids.length === 0) return res.json({ total_points: 0, earned_points: 0, details: [] });
-    db.all(`SELECT * FROM choices WHERE question_id IN (${qids.join(',')})`, (err2, choices)=>{
-      if(err2) return res.status(500).json({ error: err2.message });
-      const choicesMap = {};
-      choices.forEach(c=>{ choicesMap[c.question_id] = choicesMap[c.question_id] || []; choicesMap[c.question_id].push(c); });
-      // fetch student's answers (optionally filter by session_id)
-      const answersSql = sessionId ? 'SELECT * FROM student_answers WHERE session_id=?' : 'SELECT * FROM student_answers WHERE student_id=? AND test_id=?';
-      const answersParams = sessionId ? [sessionId] : [studentId, testId];
-      db.all(answersSql, answersParams, (err3, answers)=>{
-        if(err3) return res.status(500).json({ error: err3.message });
-        const answersMap = {};
-        (answers||[]).forEach(a=>{ answersMap[a.question_id] = answersMap[a.question_id] || []; answersMap[a.question_id].push(a); });
-        // build details
-        let total = 0;
-        let earned = 0;
-        const details = questions.map(q=>{
-          const qChoices = choicesMap[q.id] || [];
-          const correctIds = qChoices.filter(c=>c.is_correct===1 || c.is_correct===true).map(c=>c.id);
-          // student submitted choice ids for this question
-          const given = (answersMap[q.id] || []).map(a=>a.choice_id).filter(x=>x!==null && typeof x !== 'undefined');
-          const uniqueGiven = Array.from(new Set(given));
-          // scoring: full points if set matches
-          const qTotal = q.points || 1;
-          total += qTotal;
-          let correct = false;
-          if(uniqueGiven.length === 0) correct = false;
-          else {
-            const s1 = new Set(uniqueGiven.map(x=>parseInt(x)));
-            const s2 = new Set(correctIds.map(x=>parseInt(x)));
-            if(s1.size === s2.size && [...s1].every(x => s2.has(x))) correct = true;
-          }
-          if(correct) earned += qTotal;
-          return { question_id: q.id, text: q.text, points: qTotal, correct, given_choice_ids: uniqueGiven, correct_choice_ids: correctIds };
-        });
-        res.json({ total_points: total, earned_points: earned, details });
-      });
-    });
+    buildTestSummaryForStudent(testId, studentId, sessionId)
+      .then(summary => res.json(summary))
+      .catch(summaryErr => res.status(500).json({ error: summaryErr.message }));
   });
+});
+
+app.get('/api/teacher/tests/:testId/summary', requireTeacher, (req, res) => {
+  const testId = req.params.testId;
+  const studentId = req.query.student_id;
+  const sessionId = req.query.session_id;
+  if(!studentId) return res.status(400).json({ error: 'student_id required' });
+  ensureTeacherOwnsTest(req, res, testId, () => {
+    buildTestSummaryForStudent(testId, studentId, sessionId)
+      .then(summary => res.json(summary))
+      .catch(summaryErr => res.status(500).json({ error: summaryErr.message }));
   });
 });
 
@@ -832,6 +889,7 @@ app.get('/api/exams', requireTeacher, (req, res) => {
       db.all(sql, params, (e, sessions) => {
         if(!e && sessions && sessions.length > 0){
           const out = sessions.map(s => ({
+            sessionId: s.id,
             studentId: s.student_id,
             studentName: s.studentName,
             testId: s.test_id,

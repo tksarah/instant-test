@@ -18,12 +18,7 @@
 <body>
   <a class="skip-link" href="#main-content">コンテンツへスキップ</a>
   <main id="main-content" class="container">
-    <header class="app-topbar" role="banner">
-      <div class="app-brand" role="heading" aria-level="1">
-        <div class="app-brand-mark">IT</div>
-        <div class="app-brand-copy"><strong>Instant Test</strong></div>
-      </div>
-    </header>
+    <!-- ブランドカードは削除されました -->
 
     <section class="cover-card box" aria-labelledby="hero-title">
       <div class="cover-grid">
@@ -32,9 +27,9 @@
             <span class="title-main">Instant Test</span>
             <span class="title-sub">ー シンプルで強力なテストツール</span>
           </h1>
-          <p class="lead">教材から問題を自動生成し、QRで配布。採点と即時フィードバックで授業を支援します。</p>
+          <p class="lead">教材から問題を自動生成し、QRで配布。採点と分析で授業を支援します。</p>
           <div class="hero-actions" style="margin-top:18px">
-            <a class="btn btn-primary" href="/login.html">ログイン</a>
+            <button id="open-login" class="btn btn-start" type="button">はじめる</button>
           </div>
         </div>
         <aside class="cover-right" aria-labelledby="features-heading">
@@ -42,7 +37,7 @@
           <ul class="feature-list">
             <li>教材テキストからの問題の自動生成</li>
             <li>問題へのQRコード（URL）アクセス</li>
-            <li>採点と即時フィードバック</li>
+            <li>採点と分析</li>
           </ul>
         </aside>
       </div>
@@ -51,5 +46,63 @@
       <div>Builder: tksarah Version: β</div>
     </footer>
   </main>
+
+  <!-- Login modal (hidden by default) -->
+  <div id="login-modal" class="modal" role="dialog" aria-modal="true" aria-hidden="true" style="display:none;">
+    <div class="modal-backdrop" id="login-backdrop"></div>
+    <div class="modal-panel" role="document" style="max-width:540px;margin:48px auto;">
+      <section class="box" aria-labelledby="login-title">
+        <h1 id="login-title" style="font-size:22px;margin-bottom:10px;">ログイン</h1>
+        <p class="small" style="margin-bottom:14px;">登録済みの教師ユーザーでログインしてください（β版）。</p>
+
+        <form id="login-form" class="task-form-stack" autocomplete="on">
+          <div style="display:grid;gap:8px;margin-bottom:12px;">
+            <label for="username">ユーザー名</label>
+            <input id="username" name="username" type="text" required />
+          </div>
+          <div style="display:grid;gap:8px;margin-bottom:12px;">
+            <label for="password">パスワード</label>
+            <input id="password" name="password" type="password" required />
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+            <button class="btn btn-primary" type="submit">ログイン</button>
+            <a class="btn btn-ghost" href="/admin.html">ユーザー管理（管理者）</a>
+            <button id="close-login" class="btn btn-ghost" type="button">閉じる</button>
+          </div>
+          <div id="login-message" class="status-message" aria-live="polite"></div>
+        </form>
+      </section>
+    </div>
+  </div>
+
+  <script>
+  (function(){
+    var openBtn = document.getElementById('open-login');
+    var modal = document.getElementById('login-modal');
+    var backdrop = document.getElementById('login-backdrop');
+    var closeBtn = document.getElementById('close-login');
+
+    function showModal(){
+      modal.style.display = 'block';
+      modal.setAttribute('aria-hidden','false');
+      document.body.style.overflow = 'hidden';
+      var first = modal.querySelector('input,button,a');
+      if(first) first.focus();
+    }
+    function hideModal(){
+      modal.style.display = 'none';
+      modal.setAttribute('aria-hidden','true');
+      document.body.style.overflow = '';
+    }
+
+    openBtn && openBtn.addEventListener('click', function(){ showModal(); });
+    closeBtn && closeBtn.addEventListener('click', function(){ hideModal(); });
+    backdrop && backdrop.addEventListener('click', function(){ hideModal(); });
+
+    // If the page is loaded with ?showLogin, open modal
+    try{ if(new URLSearchParams(window.location.search).get('showLogin')) showModal(); }catch(e){}
+  })();
+  </script>
+  <script src="/login.js"></script>
 </body>
 </html>

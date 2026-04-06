@@ -32,6 +32,18 @@ $env:GEMINI_MODEL="gemini-2.5-flash-lite"
 node index.js
 ```
 
+ローカル開発では `server/.env` ファイルを使って環境変数を管理できます。`server/index.js` は `dotenv` を読み込むため、以下のような `.env` を `server/` に置くと便利です（例示）。
+
+```text
+# server/.env
+ADMIN_PASSWORD=your_admin_password_here
+GEMINI_API_KEY=your_gemini_api_key_if_needed
+GEMINI_MODEL=gemini-2.5-flash-lite
+PORT=3000
+```
+
+サンプルは `server/.env.example` に用意してあります。実際のパスワードや API キーは `server/.env` に記載し、リポジトリには含めないでください。
+
 4. ブラウザで開く: http://localhost:3000
 
 主要な環境変数

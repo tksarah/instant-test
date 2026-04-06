@@ -211,6 +211,8 @@
     const [reportsLoading, setReportsLoading] = React.useState(false);
     const [reportsPage, setReportsPage] = React.useState(1);
     const [reportsPerPage] = React.useState(10);
+    const [reportsSortKey, setReportsSortKey] = React.useState('finished_at');
+    const [reportsSortDir, setReportsSortDir] = React.useState('desc'); // 'asc' or 'desc'
     const [reportFilterTest, setReportFilterTest] = React.useState('');
     const [reportFilterUser, setReportFilterUser] = React.useState('');
     const [reportDatePreset, setReportDatePreset] = React.useState('all');
@@ -218,8 +220,11 @@
     const [reportDateTo, setReportDateTo] = React.useState('');
     const [reportSummaryOpen, setReportSummaryOpen] = React.useState(false);
     const [reportSummaryData, setReportSummaryData] = React.useState(null);
+    const [reportFilterAnalytics, setReportFilterAnalytics] = React.useState(null);
+    const [reportFilterAnalyticsLoading, setReportFilterAnalyticsLoading] = React.useState(false);
     const [initialDataLoading, setInitialDataLoading] = React.useState(true);
     const [studentBusyLabel, setStudentBusyLabel] = React.useState('');
+    const reportSummaryCacheRef = React.useRef({});
     // selectedUserId / selectedUserSummary removed (side-card feature disabled)
     React.useEffect(()=>{
       setInitialDataLoading(true);
@@ -266,8 +271,8 @@
 
     function logoutTeacher(){
       fetch('/api/teacher/logout', { method: 'POST' })
-        .then(function(){ window.location.href = '/login.html'; })
-        .catch(function(){ window.location.href = '/login.html'; });
+        .then(function(){ window.location.href = '/'; })
+        .catch(function(){ window.location.href = '/'; });
     }
 
     // fetch question counts for tests whenever tests list changes
@@ -561,7 +566,7 @@
       e('div', { className: 'task-page-hero compact teacher-page-hero' },
         e('div', null,
           e('p', { className: 'eyebrow' }, '教員メニュー'),
-          e('h1', null, '授業準備ダッシュボード'),
+          e('h1', null, 'テスト準備ダッシュボード'),
           e('p', { className: 'lead' }, 'テストの作成、公開、共有、結果確認をまとめて行えます。')
         )
       ),
@@ -745,7 +750,7 @@
           if(j.error){ setMessage(j.error); setStudentBusyLabel(''); return; }
           setStudent(j);
           setStudentClassId(String(j.class_id || activeClassId));
-          setMessage('ようこそ ' + j.name);
+          // removed welcome message to simplify student UI
           if(sharedStudentAccess){
             setStudentTests([t]);
           } else {
@@ -1136,48 +1141,31 @@
       }).filter(Boolean);
 
       return e('div', { className: 'student-exam-shell' },
-        e('aside', { className: 'student-exam-sidebar' },
-          e('section', { className: 'student-exam-panel student-exam-panel-emphasis' },
-            e('p', { className: 'student-preview-kicker student-preview-kicker-muted' }, '学習セッション'),
-            e('h3', null, currentTest.name),
-            e('p', { className: 'student-exam-panel__lead' }, (student && student.name ? student.name : studentName || '学習者') + ' として学習中'),
-            e('div', { className: 'student-exam-progress-bar' }, e('span', { style: { width: progressPercent + '%' } })),
-            e('div', { className: 'student-exam-panel__meta' },
-              e('span', null, '進捗 ' + progressPercent + '%'),
-              e('span', null, '全 ' + currentQuestions.length + ' 問')
-            )
-          ),
-          e('section', { className: 'student-exam-panel' },
-            e('div', { className: 'student-preview-panel__header' },
-              e('div', null,
-                e('p', { className: 'student-preview-kicker student-preview-kicker-muted' }, 'ステップガイド'),
-                e('h3', null, '学習ステップ')
-              )
-            ),
-            e('div', { className: 'student-question-track' }, currentQuestions.map(function(item, index){
-              const done = index < currentIndex || (lastResult && index === currentIndex);
-              const active = index === currentIndex && !lastResult;
-              return e('div', { key: item.id || index, className: cx('student-question-track__item', done && 'is-done', active && 'is-active') },
-                e('span', { className: 'student-question-track__index' }, String(index + 1).padStart(2, '0')),
-                e('span', { className: 'student-question-track__label' }, done ? '完了' : (active ? '学習中' : 'これから'))
-              );
-            }))
-          )
-        ),
         e('section', { className: 'student-exam-main' },
           studentBusyLabel ? e('div', { className: 'student-status-strip', role: 'status' }, studentBusyLabel) : null,
           e('div', { className: 'student-exam-topbar' },
-            e('div', null,
-              e('p', { className: 'student-preview-kicker student-preview-kicker-muted' }, q.type === 'multiple' ? '複数選択' : 'ひとつ選択'),
-              e('h2', null, '問題 ' + (currentIndex + 1) + ' / ' + currentQuestions.length)
+            e('div', null),
+            
+          ),
+          e('section', { className: 'student-exam-panel student-exam-progress-panel' },
+            e('div', { className: 'student-exam-progress-panel__header' },
+              e('div', null,
+                e('p', { className: 'student-preview-kicker student-preview-kicker-muted' }, 'テスト進捗'),
+                e('h3', null, currentTest.name)
+              ),
+              e('span', { className: 'student-status-pill is-neutral' }, '進捗 ' + progressPercent + '%')
             ),
-            e('span', { className: 'student-status-pill is-neutral' }, lastResult ? '確認完了' : '考え中')
+            e('p', { className: 'student-exam-progress-panel__lead' }, (student && student.name ? student.name : studentName || '学習者') + ' として学習中'),
+            e('div', { className: 'student-exam-progress-bar' }, e('span', { style: { width: progressPercent + '%' } })),
+            e('div', { className: 'student-exam-panel__meta' },
+              e('span', null, '解答済み ' + answeredCount + ' / ' + currentQuestions.length),
+              e('span', null, '残り ' + Math.max(currentQuestions.length - answeredCount, 0) + ' 問')
+            )
           ),
           e('article', { className: 'student-question-card' },
             e('div', { className: 'student-question-card__header' },
-              e('span', { className: 'student-pill student-pill-soft' }, q.type === 'multiple' ? '複数選べます' : '1つ選びます'),
-              e('span', { className: 'student-question-card__count' }, '設問 ' + (currentIndex + 1))
-            ),
+                e('span', { className: 'student-question-card__type-label' }, q && q.type === 'multiple' ? '複数選択' : '１つ選択')
+              ),
             e('h3', null, q.text),
             e('p', { className: 'student-question-card__hint' }, lastResult ? '答えと解説を確認して、次の問題へ進みます。' : '選んだあとすぐに答え合わせできるので、テンポよく学習できます。'),
             e('div', { className: 'student-choice-list' }, (q.choices || []).map(function(c){
@@ -1195,7 +1183,7 @@
           lastResult ? e('section', { className: cx('student-feedback-card', lastResult.correct ? 'is-correct' : 'is-incorrect') },
             e('div', { className: 'student-feedback-card__header' },
               e('div', null,
-                e('p', { className: 'student-preview-kicker student-preview-kicker-muted' }, 'ミニふりかえり'),
+                // title removed: previously showed 'ミニふりかえり'
                 e('h3', null, lastResult.correct ? 'よくできました' : 'ここは見直そう')
               ),
               e('span', { className: cx('student-status-pill', lastResult.correct ? 'is-correct' : 'is-incorrect') }, lastResult.correct ? '理解OK' : '見直し')
@@ -1213,7 +1201,7 @@
             e('div', { className: 'student-exam-actions' },
               currentIndex + 1 < currentQuestions.length
                 ? e('button', { onClick: function(){ nextQuestion(); }, className: 'btn btn-primary align-right', type: 'button' }, '次の問題へ')
-                : e('button', { onClick: function(){ nextQuestion(); }, className: 'btn btn-review btn-center', type: 'button' }, 'ふりかえりを見る')
+                : null
             )
           ) : e('div', { className: 'student-exam-actions' },
             e('span', { className: 'student-action-hint' }, currentSelection.length ? 'この答えでチェックします。' : '1つ以上選ぶとチェックできます。'),
@@ -1224,21 +1212,23 @@
     }
 
     const studentNode = e('section', { className: 'task-page' },
-      e('div', { className: 'task-page-hero compact' },
-        e('div', null,
-          e('p', { className: 'eyebrow' }, sharedStudentAccess ? '生徒画面' : '生徒画面プレビュー'),
-          e('h1', null, sharedStudentAccess ? 'テストに参加' : '生徒画面プレビュー'),
-          e('p', { className: 'lead' }, sharedStudentAccess ? '共有されたテストに参加できます。表示名を入力して開始してください。' : '生徒が利用する受験画面の表示内容を確認できます。')
-        )
-      ),
-      e('div', { className: 'task-section-card' }, renderStudent())
+      e('div', { className: 'task-section-card' },
+        renderStudent(),
+        /* 最後の問題で解説カードの下に表示するボタン */
+        (lastResult && currentIndex + 1 >= currentQuestions.length)
+          ? e('div', { className: 'student-exam-actions student-exam-actions--under-explanation' },
+              e('button', { onClick: function(){ nextQuestion(); }, className: 'btn btn-review btn-center', type: 'button' }, 'ふりかえりを見る')
+            )
+          : null
+      )
     );
 
     // Reports view (integrated)
-    const filteredReports = (reports || []).filter(r => {
-      const tn = (r.testName || '').toLowerCase();
+      const filteredReports = (reports || []).filter(r => {
+        const tn = (r.testName || '').toLowerCase();
       const un = (r.studentName || '').toLowerCase();
-      if(reportFilterTest && !tn.includes((reportFilterTest||'').toLowerCase())) return false;
+        // If a test is selected from the dropdown, match exact test name (case-insensitive)
+        if(reportFilterTest && tn !== (reportFilterTest||'').toLowerCase()) return false;
       if(reportFilterUser && !un.includes((reportFilterUser||'').toLowerCase())) return false;
       // date range filter
       try{
@@ -1260,10 +1250,31 @@
       }catch(e){ /* ignore date parse errors, don't filter out */ }
       return true;
     });
-    const totalReports = filteredReports.length;
+    // Apply sorting to filteredReports based on selected key/dir
+    const sortedReports = (filteredReports || []).slice();
+    try{
+      sortedReports.sort(function(a,b){
+        const key = reportsSortKey || 'finished_at';
+        let va = a[key];
+        let vb = b[key];
+        // normalize for known keys
+        if(key === 'studentName' || key === 'testName'){
+          va = String(va || '').toLowerCase(); vb = String(vb || '').toLowerCase();
+        } else if(key === 'percent' || key === 'score' || key === 'maxScore'){
+          va = Number(va || 0); vb = Number(vb || 0);
+        } else { // date
+          va = new Date(a.finished_at || a.started_at || a.created_at || '');
+          vb = new Date(b.finished_at || b.started_at || b.created_at || '');
+        }
+        if(va < vb) return reportsSortDir === 'asc' ? -1 : 1;
+        if(va > vb) return reportsSortDir === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }catch(e){ /* ignore sort errors */ }
+    const totalReports = sortedReports.length;
     const pages = Math.max(1, Math.ceil(totalReports / reportsPerPage));
     const currentPage = Math.min(Math.max(1, reportsPage || 1), pages);
-    const pageSlice = filteredReports.slice((currentPage-1)*reportsPerPage, currentPage*reportsPerPage);
+    const pageSlice = sortedReports.slice((currentPage-1)*reportsPerPage, currentPage*reportsPerPage);
 
     function exportReportsCSV(){
       // CSV columns aligned with visible table: 日時, studentName, testName, score, maxScore, percent
@@ -1282,6 +1293,241 @@
       ? Math.round(filteredReports.reduce(function(sum, r){ return sum + Number(r.percent || 0); }, 0) / filteredReports.length)
       : 0;
     const uniqueStudentsCount = Array.from(new Set(filteredReports.map(function(r){ return r.studentId || r.studentName || ''; }).filter(Boolean))).length;
+    const selectedReportTest = reportFilterTest
+      ? (tests || []).find(function(t){ return String(t.name || '') === String(reportFilterTest || ''); })
+      : null;
+    const selectedReportTestId = selectedReportTest ? selectedReportTest.id : '';
+    const selectedReportRows = selectedReportTestId
+      ? filteredReports.filter(function(row){ return String(row.testId || '') === String(selectedReportTestId); })
+      : [];
+    const selectedReportRowsKey = selectedReportRows.map(function(row, index){
+      return [row.sessionId || '', row.studentId || '', row.finished_at || row.started_at || '', index].join('|');
+    }).join('::');
+
+    function buildSummaryFromAnswerRows(questionsForTest, answerRows, sessionId){
+      const scopedRows = (answerRows || []).filter(function(answer){
+        if(!sessionId) return true;
+        if(answer && (answer.session_id === sessionId || String(answer.session_id || '') === String(sessionId))) return true;
+        return false;
+      });
+      const fallbackRows = scopedRows.length ? scopedRows : (answerRows || []);
+      const byQuestion = {};
+      (fallbackRows || []).forEach(function(answer){
+        const questionId = answer.question_id;
+        if(!questionId) return;
+        byQuestion[questionId] = byQuestion[questionId] || [];
+        byQuestion[questionId].push(answer);
+      });
+      const details = (questionsForTest || []).map(function(question){
+        const rows = byQuestion[question.id] || [];
+        const questionCorrect = rows.some(function(answer){ return Number(answer.correct || 0) === 1; });
+        return {
+          question_id: question.id,
+          correct: questionCorrect
+        };
+      });
+      return { details: details };
+    }
+
+    function fetchReportAnalyticsSummary(testId, row, questionsForTest){
+      const sessionId = row.sessionId || '';
+      const cacheKey = [testId, row.studentId || '', sessionId].join(':');
+      if(reportSummaryCacheRef.current[cacheKey]){
+        return Promise.resolve(reportSummaryCacheRef.current[cacheKey]);
+      }
+      const params = new URLSearchParams();
+      params.set('student_id', row.studentId || '');
+      if(sessionId){
+        params.set('session_id', sessionId);
+      }
+
+      return fetch('/api/teacher/tests/' + encodeURIComponent(testId) + '/summary?' + params.toString())
+        .then(function(r){
+          if(!r.ok) throw new Error('teacher_summary_unavailable');
+          return r.json();
+        })
+        .catch(function(){
+          return fetch('/api/studentAnswers?student_id=' + encodeURIComponent(row.studentId || '') + '&test_id=' + encodeURIComponent(testId))
+            .then(function(r){
+              if(!r.ok) throw new Error('student_answers_unavailable');
+              return r.json();
+            })
+            .then(function(answerRows){
+              return buildSummaryFromAnswerRows(questionsForTest, Array.isArray(answerRows) ? answerRows : [], sessionId);
+            });
+        })
+        .then(function(summary){
+          reportSummaryCacheRef.current[cacheKey] = summary;
+          return summary;
+        });
+    }
+
+    React.useEffect(function(){
+      let cancelled = false;
+
+      if(mode !== 'reports' || !selectedReportTest || !selectedReportTestId){
+        setReportFilterAnalytics(null);
+        setReportFilterAnalyticsLoading(false);
+        return function(){ cancelled = true; };
+      }
+
+      const matchingRows = selectedReportRows;
+      const validRows = matchingRows.filter(function(row){
+        return row && row.studentId;
+      });
+
+      setReportFilterAnalyticsLoading(true);
+
+      fetch('/api/tests/' + encodeURIComponent(selectedReportTest.id) + '/questions').then(function(r){
+        if(!r.ok) throw new Error('questions_fetch_failed');
+        return r.json();
+      }).then(function(questionsForTest){
+        return Promise.all([
+          Promise.resolve(Array.isArray(questionsForTest) ? questionsForTest : []),
+          Promise.allSettled(validRows.map(function(row){
+            return fetchReportAnalyticsSummary(selectedReportTest.id, row, questionsForTest || []);
+          }))
+        ]);
+      }).then(function(results){
+        if(cancelled) return;
+        const questionsForTest = Array.isArray(results[0]) ? results[0] : [];
+        const settledSummaries = Array.isArray(results[1]) ? results[1] : [];
+        const summaries = settledSummaries
+          .filter(function(item){ return item && item.status === 'fulfilled' && item.value; })
+          .map(function(item){ return item.value; });
+        const failedCount = settledSummaries.filter(function(item){ return item && item.status === 'rejected'; }).length;
+        const detailMap = {};
+        questionsForTest.forEach(function(question, index){
+          detailMap[question.id] = {
+            questionId: question.id,
+            label: 'Q' + (index + 1),
+            text: question.text || '無題の問題',
+            attempts: 0,
+            correct: 0,
+            rate: 0
+          };
+        });
+        summaries.forEach(function(summary){
+          (summary && summary.details || []).forEach(function(detail){
+            if(!detailMap[detail.question_id]) return;
+            detailMap[detail.question_id].attempts += 1;
+            if(detail.correct) detailMap[detail.question_id].correct += 1;
+          });
+        });
+        const questionRates = questionsForTest.map(function(question){
+          var item = detailMap[question.id] || {
+            questionId: question.id,
+            label: 'Q?',
+            text: question.text || '無題の問題',
+            attempts: 0,
+            correct: 0,
+            rate: 0
+          };
+          item.rate = item.attempts ? Math.round(item.correct / item.attempts * 100) : 0;
+          return item;
+        });
+        setReportFilterAnalytics({
+          testId: selectedReportTest.id,
+          testName: selectedReportTest.name || reportFilterTest,
+          averagePercent: averageReportPercent,
+          sampleSize: matchingRows.length,
+          questionRates: questionRates,
+          partialError: failedCount > 0 ? '一部の受験結果を集計できなかったため、表示は取得できたデータのみで計算しています。' : ''
+        });
+        setReportFilterAnalyticsLoading(false);
+      }).catch(function(){
+        if(cancelled) return;
+        setReportFilterAnalytics({
+          testId: selectedReportTest.id,
+          testName: selectedReportTest.name || reportFilterTest,
+          averagePercent: averageReportPercent,
+          sampleSize: matchingRows.length,
+          questionRates: [],
+          error: '問題別集計の取得に失敗しました'
+        });
+        setReportFilterAnalyticsLoading(false);
+      });
+
+      return function(){
+        cancelled = true;
+      };
+    }, [mode, selectedReportTest, selectedReportTestId, selectedReportRowsKey, averageReportPercent]);
+
+    function makeSortHandler(key){
+      return function(){
+        if(reportsSortKey === key){ setReportsSortDir(reportsSortDir === 'asc' ? 'desc' : 'asc'); }
+        else { setReportsSortKey(key); setReportsSortDir('asc'); }
+        setReportsPage(1);
+      };
+    }
+
+    function renderSortLabel(label, key){
+      const arrow = reportsSortKey === key ? (reportsSortDir === 'asc' ? ' ▲' : ' ▼') : '';
+      return e('button', { onClick: makeSortHandler(key), className: 'sort-button', type: 'button', style: { background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' } }, label + arrow);
+    }
+
+    function renderReportFilterAnalytics(){
+      if(!selectedReportTest){
+        return null;
+      }
+
+      if(reportFilterAnalyticsLoading){
+        return e('div', { className: 'report-filter-analytics report-filter-analytics--loading' }, 'テスト集計を読み込み中...');
+      }
+
+      if(!reportFilterAnalytics){
+        return null;
+      }
+
+      const donutPercent = Math.max(0, Math.min(100, Number(reportFilterAnalytics.averagePercent || 0)));
+      const donutStyle = {
+        background: 'conic-gradient(var(--color-accent) 0 ' + donutPercent + '%, #dfe8f2 ' + donutPercent + '% 100%)'
+      };
+
+      return e('div', { className: 'report-filter-analytics' },
+        e('div', { className: 'report-filter-analytics__header' },
+          e('strong', null, '選択中テストの集計'),
+          e('span', { className: 'small' }, (reportFilterAnalytics.testName || 'テスト') + ' / ' + String(reportFilterAnalytics.sampleSize || 0) + '件')
+        ),
+        e('div', { className: 'report-filter-analytics__grid' },
+          e('section', { className: 'report-chart-card' },
+            e('div', { className: 'report-chart-card__title' }, '平均正答率'),
+            e('div', { className: 'report-donut-chart', style: donutStyle, role: 'img', 'aria-label': '平均正答率 ' + donutPercent + 'パーセント' },
+              e('div', { className: 'report-donut-chart__center' },
+                e('strong', null, donutPercent + '%'),
+                e('span', null, '平均')
+              )
+            )
+          ),
+          e('section', { className: 'report-chart-card report-chart-card--bars' },
+            e('div', { className: 'report-chart-card__title' }, '問題別の回答率'),
+            reportFilterAnalytics.error
+              ? e('div', { className: 'small' }, reportFilterAnalytics.error)
+              : e(React.Fragment, null,
+                  reportFilterAnalytics.partialError
+                    ? e('div', { className: 'small report-filter-analytics__note' }, reportFilterAnalytics.partialError)
+                    : null,
+                  !(reportFilterAnalytics.questionRates || []).length
+                    ? e('div', { className: 'small' }, '対象データがありません')
+                    : e('div', { className: 'report-bars' },
+                        reportFilterAnalytics.questionRates.map(function(item){
+                          return e('div', { key: item.questionId, className: 'report-bars__row' },
+                            e('div', { className: 'report-bars__meta' },
+                              e('span', { className: 'report-bars__label' }, item.label),
+                              e('span', { className: 'report-bars__text', title: item.text }, item.text),
+                              e('span', { className: 'report-bars__value' }, item.rate + '%')
+                            ),
+                            e('div', { className: 'report-bars__track', 'aria-hidden': true },
+                              e('div', { className: 'report-bars__fill', style: { width: item.rate + '%' } })
+                            )
+                          );
+                        })
+                      )
+                )
+          )
+        )
+      );
+    }
 
     const reportsNode = e('section', { className: 'task-page' },
       e('div', { className: 'task-page-hero compact' },
@@ -1316,7 +1562,11 @@
           )
         ),
         e('div', { className: 'controls' },
-          e('input', { placeholder: 'テスト名でフィルタ', value: reportFilterTest, onChange: ev => { setReportFilterTest(ev.target.value); setReportsPage(1); } }),
+          // テスト名は既存のテスト一覧から選べるようにする
+          e('select', { value: reportFilterTest, onChange: ev => { setReportFilterTest(ev.target.value); setReportsPage(1); } },
+            e('option', { value: '' }, 'テスト名でフィルタ（すべて）'),
+            (tests || []).map(function(t){ return e('option', { key: t.id, value: t.name || '' }, t.name || ('テスト ' + t.id)); })
+          ),
           e('input', { placeholder: '生徒名で検索', value: reportFilterUser, onChange: ev => { setReportFilterUser(ev.target.value); setReportsPage(1); } }),
           e('select', { value: reportDatePreset, onChange: ev => { setReportDatePreset(ev.target.value); setReportsPage(1); } },
             e('option', { value: 'all' }, '全期間'),
@@ -1328,7 +1578,8 @@
           reportDatePreset === 'range' ? e('input', { type: 'date', value: reportDateTo, onChange: ev => { setReportDateTo(ev.target.value); setReportsPage(1); } }) : null,
           e('button', { onClick: fetchReports, className: 'btn btn-primary', type: 'button' }, '更新'),
           e('button', { onClick: exportReportsCSV, className: 'btn btn-ghost', type: 'button' }, 'CSV出力')
-        )
+        ),
+        renderReportFilterAnalytics()
       ),
       e('section', { className: 'task-section-card' },
         e('div', { className: 'task-section-heading' },
@@ -1340,7 +1591,7 @@
         e('div', { className: 'reports-layout' },
           e('div', { className: 'reports-main', style: { width: '100%' } },
             e('table', { className: 'reports-table' },
-              e('thead', null, e('tr', null, e('th', null, '日時'), e('th', null, '生徒名'), e('th', null, 'テスト名'), e('th', null, '得点'), e('th', null, '満点'), e('th', null, '正答率'), e('th', null, '操作'))),
+              e('thead', null, e('tr', null, e('th', null, renderSortLabel('日時','finished_at')), e('th', null, renderSortLabel('生徒名','studentName')), e('th', null, renderSortLabel('テスト名','testName')), e('th', null, renderSortLabel('得点','score')), e('th', null, e('span', null, '満点')), e('th', null, renderSortLabel('正答率','percent')), e('th', null, '操作'))),
               e('tbody', null,
                 pageSlice.length === 0 ? e('tr', null, e('td', { colSpan: 7, className: 'small' }, reportsLoading ? '読み込み中...' : '該当するテストがありません')) : pageSlice.map(function(row, idx){
                   const keyId = (row.studentId||'')+'-'+(row.testId||'')+'-'+idx;
@@ -1446,7 +1697,14 @@
       ? { eyebrow: '教員メニュー', title: '成績分析', description: '受験結果の確認' }
       : (mode === 'student'
         ? { eyebrow: '教員メニュー', title: '生徒画面プレビュー', description: '配布前の表示確認' }
-        : { eyebrow: '教員メニュー', title: '授業準備', description: 'テストの作成と管理' });
+        : { eyebrow: '教員メニュー', title: 'テスト準備', description: 'テストの作成と管理' });
+    const teacherDisplayName = teacherUser && typeof teacherUser.display_name === 'string'
+      ? teacherUser.display_name.trim()
+      : '';
+    const teacherUsername = teacherUser && typeof teacherUser.username === 'string'
+      ? teacherUser.username.trim()
+      : '';
+    const teacherHeaderName = teacherDisplayName || teacherUsername;
 
     if(sharedStudentAccess){
       return e('main', { id: 'main-content', className: 'app-shell', role: 'main' },
@@ -1461,16 +1719,27 @@
     return e('main', { id: 'main-content', className: 'app-shell', role: 'main' },
       e('header', { className: 'app-topbar' },
         e('div', { className: 'app-topbar-main' },
-          e('div', { className: 'app-brand' },
-            e('div', { className: 'app-brand-mark' }, 'IT'),
-            e('div', { className: 'app-brand-copy' },
-              e('strong', null, 'InstantTest'),
-                e('span', null, 'テスト作成・配布・採点')
-            )
+          e('div', { className: 'app-brand-stack' },
+            e('div', { className: 'app-brand' },
+              e('div', { className: 'app-brand-mark' }, 'IT'),
+              e('div', { className: 'app-brand-copy' },
+                e('strong', null, 'InstantTest'),
+                  e('span', null, 'テスト作成・配布・採点')
+              )
+            ),
+            teacherHeaderName ? e('div', { className: 'app-brand-teacher', 'aria-label': 'ログイン中の教師' },
+              e('span', { className: 'app-brand-teacher__label' }, '担当教師'),
+              e('strong', { className: 'app-brand-teacher__name' }, teacherHeaderName),
+              teacherDisplayName && teacherUsername && teacherDisplayName !== teacherUsername
+                ? e('span', { className: 'app-brand-teacher__meta' }, '@' + teacherUsername)
+                : null
+            ) : null
           ),
           e('div', { className: 'app-workspace-context' },
             e('span', { className: 'app-workspace-context__eyebrow' }, workspaceMeta.eyebrow),
-            e('strong', { className: 'app-workspace-context__title' }, workspaceMeta.title),
+            e('div', { className: 'app-workspace-context__heading' },
+              e('strong', { className: 'app-workspace-context__title' }, workspaceMeta.title)
+            ),
             e('span', { className: 'app-workspace-context__description' }, workspaceMeta.description)
           )
         ),

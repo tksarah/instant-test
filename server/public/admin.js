@@ -121,16 +121,18 @@
     var html = '';
     items.forEach(function(item){
       var summary = getSummary(item);
-      var displayName = item.display_name ? '表示名: ' + escapeHtml(item.display_name) : '表示名は未設定';
+      var displayName = item.display_name ? escapeHtml(item.display_name) : '';
       html += ''
         + '<article class="teacher-card" data-user-id="' + item.id + '">'
         + '  <div class="teacher-card-head">'
         + '    <div class="teacher-card-title">'
         + '      <strong>' + escapeHtml(item.username) + '</strong>'
-        + '      <span>' + displayName + '</span>'
-        + '      <span>作成日時: ' + escapeHtml(formatDate(item.created_at)) + '</span>'
+        + '      <div>'
+        + '        <span class="teacher-display-name">' + (displayName ? '表示名: ' + displayName : '表示名は未設定') + '</span>'
+        + '      </div>'
+        + '      <span style="font-size:12px;color:var(--text-soft);">作成: ' + escapeHtml(formatDate(item.created_at)) + '</span>'
         + '    </div>'
-        + '    <button class="btn btn-small btn-danger" data-action="delete" data-id="' + item.id + '" type="button">この教師を完全削除</button>'
+        + '    <button class="btn btn-small btn-danger" data-action="delete" data-id="' + item.id + '" type="button">削除</button>'
         + '  </div>'
         + '  <div class="teacher-card-meta">'
         + '    <div class="teacher-metric"><strong>' + summary.classes + '</strong><span>クラス</span></div>'
@@ -139,6 +141,16 @@
         + '    <div class="teacher-metric"><strong>' + summary.students + '</strong><span>生徒</span></div>'
         + '    <div class="teacher-metric"><strong>' + summary.studentAnswers + '</strong><span>回答</span></div>'
         + '    <div class="teacher-metric"><strong>' + summary.examSessions + '</strong><span>受験記録</span></div>'
+        + '  </div>'
+        + '  <div style="display:flex;gap:8px;align-items:center;margin-top:8px;">'
+        + '    <div style="display:flex;gap:8px;align-items:center;flex:1;">'
+        + '      <input class="edit-display-input" type="text" placeholder="表示名を入力" value="' + (displayName || '') + '" style="padding:6px;border-radius:8px;border:1px solid #ddd;flex:1;" />'
+        + '      <button class="btn btn-small" data-action="save-display" data-id="' + item.id + '" type="button">保存</button>'
+        + '    </div>'
+        + '    <div style="display:flex;gap:8px;align-items:center;">'
+        + '      <input class="teacher-password-input" type="password" placeholder="新しいパスワード" style="padding:6px;border-radius:8px;border:1px solid #ddd;" />'
+        + '      <button class="btn btn-small" data-action="save-password" data-id="' + item.id + '" type="button">パスワード更新</button>'
+        + '    </div>'
         + '  </div>'
         + '  <div class="teacher-card-foot">'
         + '    <p>削除時にはログインセッション ' + summary.teacherSessions + ' 件も同時に消去します。</p>'
@@ -193,6 +205,81 @@
         }).catch(function(){
           btn.disabled = false;
           showListMessage('通信に失敗しました', true);
+        });
+      });
+    });
+
+    // 保存ボタンハンドラ
+    host.querySelectorAll('button[data-action="save-display"]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var id = btn.getAttribute('data-id');
+        var article = btn.closest('article');
+        if(!article) return;
+        var input = article.querySelector('.edit-display-input');
+        if(!input) return;
+        var val = (input.value || '').trim();
+        btn.disabled = true;
+        showListMessage('保存しています…');
+        apiFetch('/api/admin/teachers/' + encodeURIComponent(id), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ display_name: val })
+        }).then(function(r){
+          btn.disabled = false;
+          if(!r.ok){
+            showListMessage('保存に失敗しました: ' + (((r.body && r.body.error) || r.status)), true);
+            return;
+          }
+          // 更新された行を反映
+          if(r.body){
+            var span = article.querySelector('.teacher-display-name');
+            span.textContent = r.body.display_name ? ('表示名: ' + r.body.display_name) : '表示名は未設定';
+            showListMessage('表示名を更新しました。', true);
+            // update local cache and summary
+            var idx = teacherItems.findIndex(function(t){ return String(t.id) === String(id); });
+            if(idx !== -1) teacherItems[idx].display_name = r.body.display_name || '';
+          }
+        }).catch(function(){
+          btn.disabled = false;
+          showListMessage('通信に失敗しました', true);
+        });
+      });
+
+      // パスワード更新ハンドラ
+      host.querySelectorAll('button[data-action="save-password"]').forEach(function(btn){
+        btn.addEventListener('click', function(){
+          var id = btn.getAttribute('data-id');
+          var article = btn.closest('article');
+          if(!article) return;
+          var input = article.querySelector('.teacher-password-input');
+          if(!input) return;
+          var val = (input.value || '').trim();
+          if(!val){
+            showListMessage('パスワードが空欄です（変更しません）。', true);
+            return;
+          }
+          if(val.length < 6){
+            showListMessage('パスワードは6文字以上で入力してください。', true);
+            return;
+          }
+          btn.disabled = true;
+          showListMessage('パスワードを更新しています…');
+          apiFetch('/api/admin/teachers/' + encodeURIComponent(id) + '/password', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: val })
+          }).then(function(r){
+            btn.disabled = false;
+            if(!r.ok){
+              showListMessage('パスワード更新に失敗しました: ' + (((r.body && r.body.error) || r.status)), true);
+              return;
+            }
+            input.value = '';
+            showListMessage('パスワードを更新しました。', true);
+          }).catch(function(){
+            btn.disabled = false;
+            showListMessage('通信に失敗しました', true);
+          });
         });
       });
     });

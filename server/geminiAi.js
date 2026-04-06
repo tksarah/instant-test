@@ -67,6 +67,33 @@ function normalizeBooleanChoices(choices){
   return normalized;
 }
 
+function normalizeBooleanQuestionText(text, fallbackLabel){
+  const rawText = String(text || '').trim();
+  if(!rawText){
+    return fallbackLabel + '。正しいか？';
+  }
+
+  const positiveEndingPattern = /(正しい|正しいです|正しいでしょう)(ですか|でしょうか|か)?[？?]?$/;
+  const negativeEndingPattern = /(間違い|間違っています|誤り|誤っています)(ですか|でしょうか|か)?[？?]?$/;
+
+  if(positiveEndingPattern.test(rawText)){
+    return rawText.replace(positiveEndingPattern, '正しいか？');
+  }
+  if(negativeEndingPattern.test(rawText)){
+    return rawText.replace(negativeEndingPattern, '間違いか？');
+  }
+
+  const statement = rawText
+    .replace(/(はい|いいえ|○|✖)で答え(なさい)?[。．]?[？?]?$/u, '')
+    .replace(/(はい|いいえ|○|✖)で選び(なさい)?[。．]?[？?]?$/u, '')
+    .replace(/(正しい|間違い|誤り)ものを選び(なさい)?[。．]?[？?]?$/u, '')
+    .replace(/(ですか|でしょうか|ますか)[？?]?$/u, '')
+    .replace(/[。．.!！?？]+$/u, '')
+    .trim();
+
+  return (statement || fallbackLabel) + '。正しいか？';
+}
+
 function normalizeQuestion(question, index, choiceCount, allowMultipleAnswers){
   const rawChoices = Array.isArray(question && question.choices) ? question.choices : [];
   const normalizedChoices = rawChoices
@@ -98,9 +125,13 @@ function normalizeQuestion(question, index, choiceCount, allowMultipleAnswers){
   }
 
   const correctCount = limitedChoices.filter((choice) => choice.is_correct).length;
+  const fallbackText = '問題 ' + (index + 1);
+  const normalizedText = choiceCount === 2
+    ? normalizeBooleanQuestionText(question && question.text, fallbackText)
+    : (String((question && question.text) || '').trim() || fallbackText);
 
   return {
-    text: String((question && question.text) || '').trim() || ('問題 ' + (index + 1)),
+    text: normalizedText,
     choices: limitedChoices,
     type: correctCount > 1 ? 'multiple' : 'single',
     points: Number.isFinite(question && question.points) ? Number(question.points) : 1,
@@ -124,7 +155,7 @@ function normalizeQuestions(payload, questionCount, choiceCount, allowMultipleAn
       return { text: buildChoiceLabel(choiceIndex), is_correct: allowMultipleAnswers ? choiceIndex < 2 : choiceIndex === 0 };
     });
     normalized.push({
-      text: '問題 ' + (fillIndex + 1),
+      text: isBooleanChoice ? ('問題 ' + (fillIndex + 1) + '。正しいか？') : ('問題 ' + (fillIndex + 1)),
       choices: choices,
       type: !isBooleanChoice && allowMultipleAnswers ? 'multiple' : 'single',
       points: 1,
@@ -136,7 +167,11 @@ function normalizeQuestions(payload, questionCount, choiceCount, allowMultipleAn
 
 function buildPrompt(options){
   const formatInstruction = options.choiceCount === 2
-    ? '- 各問題は必ず○/✖の2択問題にする。choices の text は必ず「○」「✖」の2つにする'
+    ? [
+        '- 各問題は必ず○/✖の2択問題にする。choices の text は必ず「○」「✖」の2つにする',
+        '- 各問題は1つの文や記述を提示し、問題文の末尾は必ず「正しいか？」または「間違いか？」で終える',
+        '- ○/✖の正解は、問題文の末尾表現と矛盾しないようにする'
+      ].join('\n')
     : options.allowMultipleAnswers
       ? '- 各問題は4択で、単一正答または複数正答を許可する。複数正答の問題を適度に含めてよい'
       : '- 各問題は単一正答の' + options.choiceCount + '択問題にする';

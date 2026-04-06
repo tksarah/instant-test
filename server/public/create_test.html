@@ -21,25 +21,32 @@
     </header>
 
     <section class="task-page-hero compact">
-      <div>
-        <p class="eyebrow"></p>
-        <h2>基本情報</h2>
-        <p class="lead">テスト名とクラスを確認してから、問題を追加してください。</p>
+      <div style="display:flex; gap:24px; align-items:flex-start; width:100%;">
+        <div style="flex:1;">
+          <p class="eyebrow"></p>
+          <h2>基本情報</h2>
+          <p class="lead">テスト名とクラスを確認してから、問題を追加してください。</p>
+        </div>
+        <div style="width:420px;">
+          <div class="task-section-card">
+            <div class="task-section-heading">
+            </div>
+            <div class="task-form-stack">
+              <label>テスト名
+                <input id="test-name" type="text" placeholder="テスト名" readonly>
+              </label>
+              <label>クラス
+                <select id="class-select"><option value="">クラス選択</option></select>
+              </label>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
 
     <div class="task-builder-grid">
       <div class="task-builder-main">
-        <section class="task-section-card">
-          <div class="task-form-stack">
-            <label>テスト名
-              <input id="test-name" type="text" placeholder="テスト名" readonly>
-            </label>
-            <label>クラス
-              <select id="class-select"><option value="">クラス選択</option></select>
-            </label>
-          </div>
-        </section>
+        <!-- テスト名／クラスの入力欄はヘッダーの基本情報カードへ移動しました -->
 
         <section class="task-section-card">
           <fieldset>
