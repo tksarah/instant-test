@@ -2,81 +2,87 @@
 
 InstantTest は、教師がテストを作成・配布し、生徒が受験して結果を確認できるローカル実行のプロトタイプです。
 
-現在の実装（要点）
-- サーバー: Node.js + Express
-- DB: SQLite（保存ファイル: `server/data.sqlite`）
-- フロントエンド: サーバーから配信される静的ファイル（`server/public/`）
-- AI 統合: `server/geminiAi.js` を通じて Google Gemini API を利用（`GEMINI_API_KEY` 必須）
+**目的**: クラス単位の簡易テスト作成／配布ワークフローを素早く検証することを主眼にしています。
 
-クイックスタート
-1. Node.js がインストールされていることを確認してください（推奨 Node.js 16+）。
-2. 依存関係をインストール:
+---
 
-```powershell
+## すばやい開始手順 (PowerShell / macOS/Linux シェル共通)
+
+1. Node.js がインストールされていることを確認（推奨: Node.js 16+）。
+2. サーバーディレクトリへ移動して依存をインストール:
+
+```bash
 cd server
 npm install
 ```
 
-3. 環境変数を設定してサーバーを起動:
+3. 環境変数を設定（`.env` を `server/.env` に作成するか、シェルで設定）
 
+例 (PowerShell):
 ```powershell
-# 管理用パスワード（管理者APIを使う場合）
-$env:ADMIN_PASSWORD="<管理者パスワード>"
-
-# AI 生成を使う場合（任意）：Google Gemini の API キー
-$env:GEMINI_API_KEY="<Gemini API Key>"
-
-# 任意で使用する Gemini モデルを上書き
-$env:GEMINI_MODEL="gemini-2.5-flash-lite"
-
+copy .env.example .env
+$env:ADMIN_PASSWORD="your_admin_password"
+# 任意: Gemini API キー
+$env:GEMINI_API_KEY="<your_gemini_api_key>"
 node index.js
 ```
 
-ローカル開発では `server/.env` ファイルを使って環境変数を管理できます。`server/index.js` は `dotenv` を読み込むため、以下のような `.env` を `server/` に置くと便利です（例示）。
-
-```text
-# server/.env
-ADMIN_PASSWORD=your_admin_password_here
-GEMINI_API_KEY=your_gemini_api_key_if_needed
-GEMINI_MODEL=gemini-2.5-flash-lite
-PORT=3000
+例 (macOS / Linux):
+```bash
+cp .env.example .env
+export ADMIN_PASSWORD=your_admin_password
+# 任意: export GEMINI_API_KEY=<your_gemini_api_key>
+node index.js
 ```
-
-サンプルは `server/.env.example` に用意してあります。実際のパスワードや API キーは `server/.env` に記載し、リポジトリには含めないでください。
 
 4. ブラウザで開く: http://localhost:3000
 
-主要な環境変数
-- `PORT` — サーバーの待ち受けポート（デフォルト: `3000`）
-- `ADMIN_PASSWORD` — 管理者操作（`/api/admin/*`）で必要。管理APIはリクエストヘッダ `x-admin-password` で送ります。
-- `GEMINI_API_KEY` — AI 生成機能を有効にするために必要（設定がないと `/api/generate-questions` はエラーになります）
+---
+
+## 主要な環境変数
+- `PORT` — サーバー待ち受けポート（デフォルト: `3000`）
+- `ADMIN_PASSWORD` — 管理（`/api/admin/*`）用パスワード。API リクエストではヘッダ `x-admin-password` を送ります。
+- `GEMINI_API_KEY` — Google Gemini を用いる場合に設定（未設定だと `/api/generate-questions` は失敗します）
 - `GEMINI_MODEL` — 使用する Gemini モデル（省略時は `gemini-2.5-flash-lite`）
 
-プロジェクト構成（抜粋）
-- `server/` — サーバーコード、API、DB 初期化、管理スクリプト
-	- `server/index.js` — エントリーポイント
-	- `server/db.js` — SQLite 初期化とスキーマ
-	- `server/geminiAi.js` — Gemini 呼び出しラッパー
-	- `server/mockAi.js` — ローカル用の簡易モック（現在ルートで使用されていません）
-	- `server/public/` — フロントエンド静的ファイル
-	- `server/scripts/` — バックフィル/メンテ用スクリプト
-- `public/` — 教師用テーマやサンプルスタイル（ハイコントラスト等）
+---
 
-開発・運用上の注意
-- AI 生成は `GEMINI_API_KEY` を用いて外部 API にアクセスします。ローカルで試す場合はキー管理に注意してください。
-- 管理 API は `ADMIN_PASSWORD` を環境変数で設定し、リクエストヘッダ `x-admin-password` に同値を送る形で保護しています（プロトタイプとして簡易実装）。
-- 教師のログイン状態は `teacher_session` という HttpOnly クッキーで管理されます。
-- 本番公開前に認証、TLS、入力検証、レート制限、監査ログ等の対策を必ず実施してください。
+## テストと検証スクリプト
+`server/` 配下には簡易検証用のスクリプトがあり、ローカル環境で API の挙動を確認できます。例:
 
-参考ファイル
-- サーバー: [server/index.js](server/index.js)
-- DB 初期化: [server/db.js](server/db.js)
+```bash
+cd server
+node test_api.js
+node test_student_flow.js
+```
+
+これらは実装の簡易チェック用スクリプトです。より体系的なテストフレームワークは未導入です。
+
+---
+
+## プロジェクト構成（抜粋）
+- `server/` — サーバー、API、DB 初期化、スクリプト
+  - [server/index.js](server/index.js) — エントリーポイント
+  - [server/db.js](server/db.js) — SQLite スキーマと初期化
+  - [server/geminiAi.js](server/geminiAi.js) — Gemini 呼び出しラッパー
+  - `server/public/` — フロントエンド静的ファイル（`app.html`, `create_test.html` 等）
+- `public/` — 教師向けのテーマサンプル（ハイコントラスト等）
+
+---
+
+## 開発・運用上の注意
+- このリポジトリはプロトタイプです。本番運用前に認証強化、TLS、入力検証、レート制限、監査ログ等の対策を必須で行ってください。
+- 教師の認証は `teacher_session`（HttpOnly クッキー）で管理されます。管理 API は `ADMIN_PASSWORD` 環境変数と `x-admin-password` ヘッダで保護しています。
+- データは `server/data.sqlite` に保存されます。バックアップ・移行を運用で検討してください。
+
+---
+
+## 参考
 - API 仕様: [SPEC.md](SPEC.md)
 - UI/UX 設計: [DESIGN.md](DESIGN.md)
+- サーバー実装: [server/index.js](server/index.js)
 
-テストとスクリプト
-- 簡易テストスクリプト: `server/test_*.js`
-- メンテナンス用スクリプト: `server/scripts/` 内の各スクリプト
+---
 
-ライセンス
+## ライセンス
 プロトタイプ用途で利用してください。変更・配布は自由ですが、安全対策は自己責任で行ってください。

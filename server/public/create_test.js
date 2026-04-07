@@ -58,8 +58,10 @@
 
   function hasPendingEditorChanges(){
     const questionField = el('question-text');
+    const explanationField = el('question-explanation');
     const draft = {
       text: String(questionField ? questionField.value : '').trim(),
+      explanation: String(explanationField ? explanationField.value : '').trim(),
       choices: state.editorChoices.map(normalizeChoice).filter(function(choice){
         return choice.text || choice.is_correct;
       })
@@ -69,6 +71,7 @@
       const source = state.questions[state.editingIndex];
       const original = {
         text: String((source && source.text) || '').trim(),
+        explanation: String((source && source.explanation) || '').trim(),
         choices: ((source && source.choices) || []).map(normalizeChoice).filter(function(choice){
           return choice.text || choice.is_correct;
         })
@@ -76,7 +79,7 @@
       return JSON.stringify(draft) !== JSON.stringify(original);
     }
 
-    return draft.text !== '' || draft.choices.length > 0;
+    return draft.text !== '' || draft.explanation !== '' || draft.choices.length > 0;
   }
 
   function refreshDirtyState(){
@@ -111,6 +114,14 @@
     if(modeChip) modeChip.textContent = state.editingIndex >= 0 ? '編集中' : '新規作成';
     if(questionCount) questionCount.textContent = state.questions.length + ' / ' + MAX_QUESTIONS + '問';
     if(choiceCount) choiceCount.textContent = '選択肢 ' + state.editorChoices.length + '件';
+    // update add/update button label based on editing state
+    const addBtn = el('add-question');
+    if(addBtn) addBtn.textContent = state.editingIndex >= 0 ? '問題を更新' : '問題を追加';
+  }
+
+  function setEditorTitle(text){
+    const title = el('editor-title');
+    if(title) title.textContent = text;
   }
 
   function mapGeneratedQuestion(question){
@@ -203,9 +214,10 @@
   function resetEditor(options){
     const config = options || {};
     el('question-text').value = '';
+    el('question-explanation').value = '';
     state.editorChoices = [ createEmptyChoice(), createEmptyChoice() ];
     state.editingIndex = -1;
-    el('editor-title').textContent = '問題を作成';
+    setEditorTitle('問題を作成');
     renderChoicesEditor();
     if(config.focusQuestion !== false) focusQuestionField();
   }
@@ -348,25 +360,27 @@
 
   function editQuestion(index){
     const q = state.questions[index]; if(!q) return;
-    el('editor-title').textContent = '問題を編集'; el('question-text').value = q.text || '';
+    setEditorTitle('問題を編集'); el('question-text').value = q.text || '';
+    el('question-explanation').value = q.explanation || '';
     state.editorChoices = (q.choices || []).map(c => ({ id: c.id, text: c.text || '', is_correct: !!c.is_correct }));
     state.editingIndex = index; renderChoicesEditor(); refreshDirtyState(); focusQuestionField();
   }
 
   function addQuestionFromEditor(){
     const text = el('question-text').value.trim(); if(!text){ setStatus('問題文を入力してください', true); return; }
+    const explanation = el('question-explanation').value.trim();
     if(state.editingIndex < 0 && state.questions.length >= MAX_QUESTIONS){ setStatus('問題は最大100問までです', true); return; }
     const choices = state.editorChoices.map(c=>({ id: c.id, text: (c.text||'').trim(), is_correct: !!c.is_correct })).filter(c=>c.text);
     if(choices.length < 2){ setStatus('選択肢を2つ以上用意してください', true); return; }
     const correctCount = choices.filter(c=>c.is_correct).length;
     if(correctCount === 0){ setStatus('少なくとも1つの選択肢を正解に設定してください', true); return; }
     const type = correctCount > 1 ? 'multiple' : 'single';
-    const q = { text: text, choices: choices, type: type, points: 1 };
+    const q = { text: text, choices: choices, type: type, points: 1, explanation: explanation };
     if(state.editingIndex >= 0){
       // preserve id if editing existing question
       const orig = state.questions[state.editingIndex];
       if(orig && orig.id) q.id = orig.id;
-      state.questions[state.editingIndex] = q; state.editingIndex = -1; el('editor-title').textContent = '問題を作成';
+      state.questions[state.editingIndex] = q; state.editingIndex = -1; setEditorTitle('問題を作成');
     }
     else { state.questions.push(q); }
       renderQuestionsList(); resetEditor(); refreshDirtyState(); setStatus('問題を追加しました。続けて入力できます。');
@@ -467,6 +481,7 @@
     el('save-test').addEventListener('click', function(e){ e.preventDefault(); saveTest(); });
     el('question-text').addEventListener('keydown', function(e){ if((e.ctrlKey || e.metaKey) && e.key === 'Enter'){ e.preventDefault(); addQuestionFromEditor(); } });
     el('question-text').addEventListener('input', refreshDirtyState);
+    el('question-explanation').addEventListener('input', refreshDirtyState);
     el('class-select').addEventListener('change', refreshDirtyState);
 
     // setup unsaved handlers

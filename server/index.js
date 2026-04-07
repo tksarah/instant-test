@@ -441,7 +441,10 @@ app.get('/api/qr-code', async (req, res) => {
 
 // Classes
 app.post('/api/classes', requireTeacher, (req, res) => {
-  const { name } = req.body;
+  let { name } = req.body || {};
+  name = typeof name === 'string' ? name.trim() : '';
+  if(!name) return res.status(400).json({ error: 'name required' });
+  if(name.length > 25) return res.status(400).json({ error: 'name too long' });
   db.run('INSERT INTO classes (teacher_id, name) VALUES (?,?)', [req.teacher.id, name], function(err){
     if(err) return res.status(500).json({ error: err.message });
     res.json({ id: this.lastID, name });

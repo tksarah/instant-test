@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
-  <title>テスト作成 - InstantTest</title>
+  <title>問題管理 - InstantTest</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -11,8 +11,8 @@
   <main class="task-builder-shell" id="main-content">
     <header class="task-builder-header">
       <div>
-        <p class="eyebrow">テスト編集</p>
-        <h1>テスト作成</h1>
+        <p class="eyebrow">テストの問題作成・編集</p>
+        <h1>問題管理</h1>
         <p class="section-note">テスト情報を確認し、問題を作成します。</p>
       </div>
       <div class="task-builder-header__actions">
@@ -108,7 +108,7 @@
         <section class="task-section-card" id="manual-editor">
             <div class="task-section-heading">
             <div data-title-icon="editor">
-              <h2>問題を入力</h2>
+              <h2 id="editor-title">問題作成</h2>
               <p class="section-note">問題文と選択肢を入力して追加します。</p>
             </div>
           </div>
@@ -127,9 +127,12 @@
                 <button id="set-four-choices" class="btn btn-small btn-ghost" type="button">4択</button>
               </div>
             </div>
-            <h3 id="editor-title">問題を作成</h3>
+            
             <label>問題文
               <textarea id="question-text" rows="4" placeholder="問題文を入力"></textarea>
+            </label>
+            <label>解説
+              <textarea id="question-explanation" rows="4" placeholder="解説を入力"></textarea>
             </label>
             <div class="builder-shortcuts" aria-label="入力ショートカット">
               <span><kbd>Enter</kbd>で次の選択肢へ</span>

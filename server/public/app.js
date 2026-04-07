@@ -116,6 +116,36 @@
     return Math.max(0, Math.min(100, Math.round(Number(earned || 0) / safeTotal * 100)));
   }
 
+  function getTeacherTestManagementState(test, questionCount){
+    const normalizedQuestionCount = Number(questionCount || 0);
+    if(!normalizedQuestionCount){
+      return {
+        label: '要問題作成',
+        detail: 'まずは問題を追加すると、配布準備を進めやすくなります。',
+        tone: 'warning'
+      };
+    }
+    if(!test.class_id){
+      return {
+        label: 'クラス未割当',
+        detail: 'クラスへ割り当てると、共有 QR で案内しやすくなります。',
+        tone: 'muted'
+      };
+    }
+    if(!test.public){
+      return {
+        label: '公開待ち',
+        detail: '公開すると、生徒がこのテストを受験できる状態になります。',
+        tone: 'default'
+      };
+    }
+    return {
+      label: '準備完了',
+      detail: '公開済みです。必要なら共有 QR でそのまま案内できます。',
+      tone: 'success'
+    };
+  }
+
   function getInitialRouteState(){
     const params = new URLSearchParams(window.location.search || '');
     const sharedTestId = (params.get('test_id') || '').trim();
@@ -183,6 +213,8 @@
     const [mode, setMode] = React.useState(sharedStudentAccess ? 'student' : 'teacher');
     const [teacherTestQuery, setTeacherTestQuery] = React.useState('');
     const [teacherFilterClassId, setTeacherFilterClassId] = React.useState('');
+    const [teacherTestViewMode, setTeacherTestViewMode] = React.useState('compact');
+    const [expandedTeacherTests, setExpandedTeacherTests] = React.useState({});
     const [qrShareModal, setQrShareModal] = React.useState({
       open: false,
       loading: false,
@@ -298,7 +330,27 @@
         setTimeout(function(){ var mc = document.getElementById('modal-content'); if(mc) mc.focus(); }, 0);
       }
     }, [modalOpen]);
-    function createClass(){ fetch('/api/classes',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name:className})}).then(r=>r.json()).then(n=>{ setClasses(prev=>prev.concat(n)); setClassName(''); }); }
+    function createClass(){
+      const name = (className || '').trim();
+      if(!name){
+        window.alert('クラス名を入力してください');
+        return;
+      }
+      if(name.length > 25){
+        window.alert('クラス名は25文字以内で入力してください');
+        return;
+      }
+      fetch('/api/classes',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name: name})})
+        .then(async r => {
+          if(!r.ok){
+            const j = await r.json().catch(()=>({ error: '登録に失敗しました' }));
+            window.alert(j.error || '登録に失敗しました');
+            return null;
+          }
+          return r.json();
+        })
+        .then(n=>{ if(n){ setClasses(prev=>prev.concat(n)); setClassName(''); } });
+    }
     function editClass(c){
       const newName = window.prompt('クラス名を編集', c.name);
       if(!newName || !newName.trim() || newName === c.name) return;
@@ -460,6 +512,14 @@
     }
     async function openQrShareModal(test){
       if(!test || !test.id) return;
+      if(!Number(testQuestionCounts[test.id] || 0)){
+        setMessage('問題が1問もないテストは共有QRを表示できません');
+        return;
+      }
+      if(!test.public){
+        setMessage('公開前のテストは共有QRを表示できません');
+        return;
+      }
       if(!test.class_id){
         setMessage('クラス未割り当てのテストは共有URLを作成できません');
         return;
@@ -551,6 +611,18 @@
       ev.dataTransfer.effectAllowed = 'move';
     }
 
+    function toggleTeacherTestExpanded(testId){
+      setExpandedTeacherTests(function(prev){
+        const next = Object.assign({}, prev);
+        if(next[testId]){
+          delete next[testId];
+        } else {
+          next[testId] = true;
+        }
+        return next;
+      });
+    }
+
     // build list of test item elements from data (keep data->UI mapping pure)
     const normalizedTeacherQuery = (teacherTestQuery || '').trim().toLowerCase();
     const displayedTests = tests.filter(function(t){
@@ -561,13 +633,61 @@
     const publicTestsCount = tests.filter(function(t){ return !!t.public; }).length;
     const draftTestsCount = tests.filter(function(t){ return !t.public; }).length;
     const assignedTestsCount = tests.filter(function(t){ return !!t.class_id; }).length;
+    const teacherFlowSteps = [
+      {
+        key: 'classroom',
+        step: '1',
+        title: 'クラス管理',
+        summary: 'クラスを作成'
+      },
+      {
+        key: 'compose',
+        step: '2',
+        title: 'テストを作成',
+        summary: '配布するテストを作成'
+      },
+      {
+        key: 'manage',
+        step: '3',
+        title: 'テストの管理',
+        items: [
+          { key: 'edit', step: '3-1', text: '問題の作成・編集' },
+          { key: 'public', step: '3-2', text: '公開設定' },
+          { key: 'share', step: '3-3', text: '共有 QR から生徒へ配布' }
+        ]
+      }
+    ];
 
     const teacherNode = e('section', { className: 'task-page' },
       e('div', { className: 'task-page-hero compact teacher-page-hero' },
-        e('div', null,
+        e('div', { className: 'teacher-page-hero__intro' },
           e('p', { className: 'eyebrow' }, '教員メニュー'),
           e('h1', null, 'テスト準備ダッシュボード'),
-          e('p', { className: 'lead' }, 'テストの作成、公開、共有、結果確認をまとめて行えます。')
+          e('p', { className: 'lead' }, '準備フローを参考に、テストの準備・配布を行います。')
+        ),
+        e('div', { className: 'teacher-page-flow' },
+          e('div', { className: 'teacher-page-flow__header' },
+            e('span', { className: 'teacher-page-flow__kicker' }, '準備フロー')
+          ),
+          e('div', { className: 'teacher-page-flow__lane' },
+            e('ol', { className: 'teacher-page-flow__list', 'aria-label': '教師メニューの準備フロー' }, teacherFlowSteps.map(function(step){
+              return e('li', { key: step.key, className: step.items ? 'teacher-page-flow__step is-detailed' : 'teacher-page-flow__step' },
+                e('div', { className: 'teacher-page-flow__step-top' },
+                  e('span', { className: 'teacher-page-flow__step-index', 'aria-hidden': true }, step.step),
+                  e('div', { className: 'teacher-page-flow__step-copy' },
+                    e('strong', { className: 'teacher-page-flow__step-title' }, step.title),
+                    step.summary ? e('span', { className: 'teacher-page-flow__step-summary' }, step.summary) : null
+                  )
+                ),
+                step.items ? e('ul', { className: 'teacher-page-flow__sublist' }, step.items.map(function(item){
+                  return e('li', { key: item.key, className: 'teacher-page-flow__subitem' },
+                    e('span', { className: 'teacher-page-flow__subindex' }, item.step),
+                    e('span', { className: 'teacher-page-flow__subtext' }, item.text)
+                  );
+                })) : null
+              );
+            }))
+          )
         )
       ),
       e('div', { className: 'task-stat-grid compact' }, [
@@ -590,35 +710,28 @@
       initialDataLoading ? e('div', { className: 'teacher-status-strip', role: 'status' }, 'クラスとテストの一覧を読み込んでいます。') : null,
       e('div', { className: 'teacher-workspace-grid' },
         e('section', { className: 'teacher-workspace-main' },
-          e('section', { className: 'task-section-card' },
+          e('section', { className: 'task-section-card teacher-class-card' },
             e('div', { className: 'task-section-heading' },
-              e('div', { 'data-title-icon': 'compose' },
-                e('h2', null, 'テストを作成'),
-                e('p', { className: 'section-note' }, 'クラスを選択して新しいテストを作成します。')
+              e('div', { 'data-title-icon': 'classroom' },
+                e('h2', null, 'クラス管理'),
+                e('p', { className: 'section-note' }, 'クラスの追加と管理を行います。')
               ),
-              e('span', { className: 'task-chip' }, selectedClass ? ('対象クラス: ' + selectedClass.name) : '対象クラス: 未選択')
+              e('span', { className: 'task-chip task-chip-muted' }, '登録済み: ' + classes.length + 'クラス')
             ),
-            null,
-            e('div', { className: 'task-form-stack teacher-create-grid' },
-              e('select', { value: selectedClass ? selectedClass.id : '', onChange: function(ev){ setSelectedClass(classes.find(function(x){ return x.id == ev.target.value; }) || null); }, 'aria-label': 'クラス選択' }, [ e('option', { key: '__empty', value: '' }, 'クラスを選択') ].concat(classes.map(function(c){ return e('option', { key: c.id, value: c.id }, c.name); })) ),
-              e('input', { value: testName, onChange: function(ev){ setTestName(ev.target.value); }, placeholder: '例: 小テスト 4月1週', 'aria-label': 'テスト名' }),
-              e('div', { className: 'task-toggle-row' },
-                e('label', { className: 'task-toggle' }, e('input', { type: 'checkbox', checked: testPublic, onChange: function(ev){ setTestPublic(!!ev.target.checked); } }), e('span', null, '公開する')),
-                e('label', { className: 'task-toggle' }, e('input', { type: 'checkbox', checked: testRandomize, onChange: function(ev){ setTestRandomize(!!ev.target.checked); } }), e('span', null, '問題順をランダム化'))
-              ),
-              e('div', { className: 'task-inline-actions' },
-                e('button', { onClick: createTest, className: 'btn btn-primary', type: 'button' }, 'テストを作成'),
-                e('span', { className: 'teacher-inline-note' }, '作成後に問題を編集できます。')
+            e('div', { className: 'teacher-class-card__top teacher-class-card__top--single' },
+              e('div', { className: 'task-inline-form teacher-class-card__form' },
+                e('input', { value: className, onChange: function(ev){ setClassName(ev.target.value); }, placeholder: '例: 1年A組', 'aria-label': 'クラス名', maxLength: 25 }),
+                e('button', { onClick: createClass, className: 'btn btn-primary', type: 'button' }, '追加')
               )
-            )
+            ),
+            classItems.length ? e('ul', { className: 'task-list' }, classItems) : e('div', { className: 'task-empty' }, 'クラスがまだありません')
           ),
           e('section', { className: 'task-section-card' },
             e('div', { className: 'task-section-heading' },
               e('div', { 'data-title-icon': 'list' },
-                e('h2', null, '配布テストの一覧と編集'),
-                e('p', { className: 'section-note' }, '公開設定、共有QR、問題編集を行えます。')
+                e('h2', null, 'テストの管理')
               ),
-              e('span', { className: 'task-chip task-chip-muted' }, '共有 QR はクラス割当後に有効')
+              e('span', { className: 'task-chip task-chip-muted' }, '共有 QR は1問以上作成・公開・クラス割当後に有効')
             ),
             e('div', { className: 'task-filter-bar' },
               e('input', {
@@ -642,53 +755,109 @@
                 type: 'button'
               }, '条件をクリア')
             ),
-            e('div', { className: 'task-results-meta' },
-              displayedTests.length + '件を表示中' + (teacherTestQuery || teacherFilterClassId ? ' / 条件あり' : ' / 全件表示')
+            e('div', { className: 'teacher-test-toolbar' },
+              e('div', { className: 'task-results-meta' },
+                displayedTests.length + '件を表示中' + (teacherTestQuery || teacherFilterClassId ? ' / 条件あり' : ' / 全件表示')
+              ),
+              e('div', { className: 'teacher-test-view-switch', role: 'group', 'aria-label': 'テストカード表示切替' },
+                e('button', {
+                  onClick: function(){ setTeacherTestViewMode('compact'); },
+                  className: teacherTestViewMode === 'compact' ? 'mode-tab is-active' : 'mode-tab',
+                  type: 'button',
+                  'aria-pressed': teacherTestViewMode === 'compact'
+                }, '簡易表示'),
+                e('button', {
+                  onClick: function(){ setTeacherTestViewMode('detailed'); },
+                  className: teacherTestViewMode === 'detailed' ? 'mode-tab is-active' : 'mode-tab',
+                  type: 'button',
+                  'aria-pressed': teacherTestViewMode === 'detailed'
+                }, '詳細表示')
+              )
             ),
-            displayedTests.length ? e('div', { className: 'task-card-grid' }, displayedTests.map(function(t){
+            displayedTests.length ? e('div', { className: cx('task-card-grid', teacherTestViewMode === 'detailed' && 'teacher-test-grid-detailed') }, displayedTests.map(function(t){
+              const questionCount = testQuestionCounts[t.id] || 0;
               const classNameForTest = (classes.find(function(c){ return c.id === t.class_id; }) || {}).name || '未割当';
-              const canShareTest = !!t.class_id;
-              return e('article', { key: t.id, draggable: true, onDragStart: function(ev){ onDragStartTest(ev, t); }, className: 'task-card teacher-test-card' },
-                e('div', { className: 'task-card-header' },
-                  e('div', null,
+              const canShareTest = Number(questionCount) > 0 && !!t.public && !!t.class_id;
+              const managementState = getTeacherTestManagementState(t, questionCount);
+              const isDetailedCard = teacherTestViewMode === 'detailed' || !!expandedTeacherTests[t.id];
+              return e('article', {
+                key: t.id,
+                draggable: true,
+                onDragStart: function(ev){ onDragStartTest(ev, t); },
+                className: cx('task-card', 'teacher-test-card', 'teacher-test-card--' + managementState.tone, isDetailedCard && 'is-detailed')
+              },
+                e('div', { className: 'task-card-header teacher-test-card__header' },
+                  e('div', { className: 'teacher-test-card__title-block' },
                     e('h4', { className: 'task-card-title', 'data-title-icon': 'test' }, t.name),
-                    e('div', { className: 'teacher-card-meta-grid' },
-                      e('p', { className: 'task-card-meta' }, 'クラス: ' + classNameForTest),
-                      e('p', { className: 'task-card-meta' }, '問題数: ' + (testQuestionCounts[t.id] || 0) + '問')
+                    e('div', { className: 'teacher-test-card__overview' },
+                      e('span', { className: 'teacher-test-state is-' + managementState.tone }, managementState.label),
+                      e('p', { className: 'teacher-test-card__helper' }, managementState.detail)
                     )
                   ),
-                  e('div', { className: 'task-badges' },
+                  e('div', { className: 'task-badges teacher-test-card__badges' },
                     e('span', { className: !!t.public ? 'badge badge-success' : 'badge' }, !!t.public ? '公開中' : '下書き'),
                     e('span', { className: !!t.randomize ? 'badge badge-accent' : 'badge badge-muted' }, !!t.randomize ? 'ランダム' : '固定順')
                   )
                 ),
-                e('div', { className: 'task-card-controls' },
-                  e('label', { className: 'task-toggle compact' }, e('input', { type: 'checkbox', checked: !!t.public, onChange: function(){ toggleTestPublic(t); } }), e('span', null, '公開')),
-                  e('label', { className: 'task-toggle compact' }, e('input', { type: 'checkbox', checked: !!t.randomize, onChange: function(){ updateTestRecord(t, { randomize: t.randomize ? 0 : 1 }, 'ランダム設定更新エラー'); } }), e('span', null, 'ランダム'))
+                e('div', { className: 'teacher-test-card__summary-grid' },
+                  e('div', { className: 'teacher-test-meta' },
+                    e('span', { className: 'teacher-test-meta__label' }, 'クラス'),
+                    e('strong', { className: 'teacher-test-meta__value' }, classNameForTest)
+                  ),
+                  e('div', { className: cx('teacher-test-meta', questionCount === 0 && 'is-warning') },
+                    e('span', { className: 'teacher-test-meta__label' }, '問題数'),
+                    e('strong', { className: 'teacher-test-meta__value' }, questionCount + '問')
+                  )
                 ),
-                e('div', { className: 'task-card-footer teacher-card-footer' },
-                  e('a', { href: '/create_test.html?class_id=' + encodeURIComponent(t.class_id || '') + '&name=' + encodeURIComponent(t.name || '') + '&test_id=' + encodeURIComponent(t.id), className: 'btn btn-small btn-primary' }, '問題編集'),
+                e('div', { className: 'teacher-test-card__primary-actions' },
+                  e('a', { href: '/create_test.html?class_id=' + encodeURIComponent(t.class_id || '') + '&name=' + encodeURIComponent(t.name || '') + '&test_id=' + encodeURIComponent(t.id), className: 'btn btn-small btn-primary' }, '問題管理'),
                   e('button', { onClick: function(){ openQrShareModal(t); }, className: 'btn btn-small btn-secondary', type: 'button', disabled: !canShareTest }, '共有 QR'),
-                  e('button', { onClick: function(){ editTest(t); }, className: 'btn btn-small btn-ghost', type: 'button' }, '名称変更'),
-                  e('button', { onClick: function(){ deleteTest(t); }, className: 'btn btn-small btn-ghost', type: 'button' }, '削除')
-                )
+                  teacherTestViewMode === 'compact'
+                    ? e('button', {
+                        onClick: function(){ toggleTeacherTestExpanded(t.id); },
+                        className: 'btn btn-small btn-ghost',
+                        type: 'button',
+                        'aria-expanded': isDetailedCard
+                      }, isDetailedCard ? '詳細を隠す' : '詳細')
+                    : null
+                ),
+                isDetailedCard ? e('div', { className: 'teacher-test-card__details' },
+                  e('div', { className: 'task-card-controls teacher-test-card__controls' },
+                    e('label', { className: 'task-toggle compact' }, e('input', { type: 'checkbox', checked: !!t.public, onChange: function(){ toggleTestPublic(t); } }), e('span', null, '公開')),
+                    e('label', { className: 'task-toggle compact' }, e('input', { type: 'checkbox', checked: !!t.randomize, onChange: function(){ updateTestRecord(t, { randomize: t.randomize ? 0 : 1 }, 'ランダム設定更新エラー'); } }), e('span', null, 'ランダム'))
+                  ),
+                  e('p', { className: 'teacher-inline-note teacher-test-card__detail-note' }, managementState.detail),
+                  e('div', { className: 'task-card-footer teacher-card-footer teacher-test-card__secondary-actions' },
+                    e('button', { onClick: function(){ editTest(t); }, className: 'btn btn-small btn-ghost', type: 'button' }, '名称変更'),
+                    e('button', { onClick: function(){ deleteTest(t); }, className: 'btn btn-small btn-ghost', type: 'button' }, '削除')
+                  )
+                ) : null
               );
             })) : e('div', { className: 'task-empty' }, teacherTestQuery || teacherFilterClassId ? '条件に一致するテストがありません' : 'テストがまだありません')
           )
         ),
         e('aside', { className: 'teacher-workspace-side' },
-          e('section', { className: 'task-section-card' },
+          e('section', { className: 'task-section-card teacher-create-card' },
             e('div', { className: 'task-section-heading' },
-              e('div', { 'data-title-icon': 'classroom' },
-                e('h2', null, 'クラス管理'),
-                e('p', { className: 'section-note' }, 'クラスの追加と管理を行います。')
+              e('div', { 'data-title-icon': 'compose' },
+                e('h2', null, 'テストを作成'),
+                e('p', { className: 'section-note' }, 'クラスを選択して新しいテストを作成します。')
+              ),
+              e('span', { className: 'task-chip' }, selectedClass ? ('対象クラス: ' + selectedClass.name) : '対象クラス: 未選択')
+            ),
+            null,
+            e('div', { className: 'task-form-stack teacher-create-grid' },
+              e('select', { value: selectedClass ? selectedClass.id : '', onChange: function(ev){ setSelectedClass(classes.find(function(x){ return x.id == ev.target.value; }) || null); }, 'aria-label': 'クラス選択' }, [ e('option', { key: '__empty', value: '' }, 'クラスを選択') ].concat(classes.map(function(c){ return e('option', { key: c.id, value: c.id }, c.name); })) ),
+              e('input', { value: testName, onChange: function(ev){ setTestName(ev.target.value); }, placeholder: '例: 小テスト 4月1週', 'aria-label': 'テスト名' }),
+              e('div', { className: 'task-toggle-row' },
+                e('label', { className: 'task-toggle' }, e('input', { type: 'checkbox', checked: testPublic, onChange: function(ev){ setTestPublic(!!ev.target.checked); } }), e('span', null, '公開する')),
+                e('label', { className: 'task-toggle' }, e('input', { type: 'checkbox', checked: testRandomize, onChange: function(ev){ setTestRandomize(!!ev.target.checked); } }), e('span', null, '問題順をランダム化'))
+              ),
+              e('div', { className: 'task-inline-actions' },
+                e('button', { onClick: createTest, className: 'btn btn-primary', type: 'button' }, '作成'),
+                e('span', { className: 'teacher-inline-note' }, '作成後に問題を編集できます。')
               )
-            ),
-            e('div', { className: 'task-inline-form' },
-              e('input', { value: className, onChange: function(ev){ setClassName(ev.target.value); }, placeholder: '例: 1年A組', 'aria-label': 'クラス名' }),
-              e('button', { onClick: createClass, className: 'btn btn-primary', type: 'button' }, '追加')
-            ),
-            classItems.length ? e('ul', { className: 'task-list' }, classItems) : e('div', { className: 'task-empty' }, 'クラスがまだありません')
+            )
           ),
           e('section', { className: 'task-section-card' },
             e('div', { className: 'task-section-heading' },
@@ -712,8 +881,7 @@
                 e('strong', null, c.name),
                 e('span', null, tests.filter(function(t){ return t.class_id === c.id; }).length + '件のテスト')
               );
-            })),
-            e('p', { className: 'teacher-inline-note' }, '共有 QR を使うには、テストをクラスへ割り当ててから公開してください。')
+            }))
           )
         )
       ),
@@ -1681,7 +1849,7 @@
                 qrShareModal.error ? e('p', { className: 'share-qr-modal__error' }, qrShareModal.error) : null,
                 e('div', { className: 'hero-actions' },
                   e('button', { onClick: function(){ copySharedUrl(qrShareModal.url); }, className: 'btn btn-primary', type: 'button' }, 'URLをコピー'),
-                  e('a', { href: qrShareModal.url, target: '_blank', rel: 'noreferrer', className: 'btn btn-ghost' }, '別タブで確認')
+                  e('a', { href: qrShareModal.url, target: '_blank', rel: 'noreferrer', className: 'btn btn-ghost', onClick: function(){ closeQrShareModal(); } }, '別タブで確認')
                 )
               )
             ),
