@@ -459,7 +459,6 @@ legend{padding:0 8px;color:var(--text-strong);font-weight:700}
   position:relative;
   overflow:hidden;
   display:grid;
-  grid-template-columns:minmax(0,1.25fr) 320px;
   gap:18px;
   padding:28px;
   border-radius:28px;
@@ -470,6 +469,8 @@ legend{padding:0 8px;color:var(--text-strong);font-weight:700}
     linear-gradient(135deg, #1f5c57 0%, #2e7f78 45%, #8ec5a4 100%);
   box-shadow:0 26px 60px rgba(27,78,73,0.22);
 }
+.student-preview-banner{grid-template-columns:minmax(0,1fr)}
+.student-summary-hero{grid-template-columns:minmax(0,1.25fr) 320px}
 
 /* Make ghost buttons readable on dark/gradient hero backgrounds */
 .student-summary-hero .btn-ghost,
@@ -509,7 +510,8 @@ legend{padding:0 8px;color:var(--text-strong);font-weight:700}
 .student-preview-kicker-muted{color:var(--text-soft)}
 .student-preview-lead{color:rgba(255,255,255,0.82);max-width:680px}
 .student-preview-banner h2,
-.student-summary-hero h2{color:#fff;font-size:34px;line-height:1.15}
+.student-summary-hero h2{color:#fff;font-size:34px;line-height:1.15;overflow-wrap:anywhere}
+.student-preview-lead{overflow-wrap:anywhere}
 .student-preview-banner__stats,
 .student-summary-stats{display:grid;gap:12px}
 .student-preview-stat{
