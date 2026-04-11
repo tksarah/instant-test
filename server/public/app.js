@@ -1112,7 +1112,7 @@
             ),
             e('h3', null, t.name),
             e('p', { className: 'student-test-card__meta' }, classLabel + ' / 答えた直後に解説とふりかえり'),
-            e('div', { className: 'student-test-card__footer' },
+            e('div', { className: cx('student-test-card__footer', sharedStudentAccess && 'student-test-card__footer-centered') },
               e('span', { className: 'student-test-card__helper' }, hasStudentName ? '最後に学習のふりかえりまで確認できます。' : '表示名を入力すると始められます。'),
               e('button', { onClick: function(){ handler(t); }, className: 'btn btn-primary', type: 'button', disabled: !hasStudentName || !!studentBusyLabel }, studentBusyLabel ? '準備中...' : buttonText)
             )
@@ -1171,7 +1171,7 @@
                 ),
                 e('span', { className: 'student-preview-caption' }, resolvedClassId ? classLabel : (sharedStudentAccess ? '共有設定を確認中' : 'クラス選択待ち'))
               ),
-              renderTestCatalog(sharedStudentAccess ? 'このテストを始める' : '学習をはじめる', attemptStartTest)
+              renderTestCatalog(sharedStudentAccess ? 'テストを始める' : '学習をはじめる', attemptStartTest)
             )
           )
         );
@@ -1185,7 +1185,7 @@
                 e('p', { className: 'student-preview-kicker' }, 'ふりかえり'),
                 e('h2', null, (summaryMeta.testName || 'この学習') + ' のふりかえり'),
                 e('p', { className: 'student-preview-lead' }, summaryPercent >= 80 ? '理解できている内容が多い状態です。気になった問題だけを短く見直せます。' : (summaryPercent >= 60 ? '正解できた内容と迷った内容が分かるように整理しています。' : '見直すべき問題がすぐ分かるように、自分の答えと正答を並べています。')),
-                e('div', { className: 'hero-actions' },
+                e('div', { className: 'hero-actions student-summary-hero__actions' },
                   e('button', { onClick: sharedStudentAccess ? function(){ goToStudentStart(); } : clearStudentSummary, className: 'btn btn-primary', type: 'button' }, sharedStudentAccess ? 'もう一度このテストを受ける' : '別の学習を見る'),
                   sharedStudentAccess ? null : e('button', { onClick: function(){ goToStudentStart(); }, className: 'btn btn-ghost btn-ghost-contrast', type: 'button' }, '最初から確認し直す')
                 )
@@ -1368,7 +1368,7 @@
             ),
             e('div', { className: 'student-exam-actions' },
               currentIndex + 1 < currentQuestions.length
-                ? e('button', { onClick: function(){ nextQuestion(); }, className: 'btn btn-primary align-right', type: 'button' }, '次の問題へ')
+                ? e('button', { onClick: function(){ nextQuestion(); }, className: 'btn btn-primary', type: 'button' }, '次の問題へ')
                 : null
             )
           ) : e('div', { className: 'student-exam-actions' },

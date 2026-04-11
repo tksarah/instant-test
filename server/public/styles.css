@@ -600,6 +600,7 @@ legend{padding:0 8px;color:var(--text-strong);font-weight:700}
 .student-test-card.is-disabled{opacity:.82}
 .student-test-card h3{font-size:22px;color:var(--color-main)}
 .student-test-card__top,.student-test-card__footer{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.student-test-card__footer-centered{flex-direction:column;justify-content:center;align-items:center;text-align:center}
 .student-test-card__meta{color:var(--text-muted);font-size:14px}
 .student-test-card__helper{font-size:13px;color:var(--text-soft)}
 
@@ -785,8 +786,10 @@ legend{padding:0 8px;color:var(--text-strong);font-weight:700}
 .student-feedback-card.is-incorrect{background:linear-gradient(180deg,#fffef8,#fff3ea);border-color:rgba(221,107,32,0.18)}
 .student-feedback-card__header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
 .student-feedback-card__body{display:grid;gap:10px}
-.student-exam-actions{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.student-exam-actions{display:flex;flex-direction:column;justify-content:center;align-items:center;gap:12px;flex-wrap:wrap;text-align:center}
 .student-action-hint{font-size:13px;color:var(--text-muted)}
+
+.student-summary-hero__actions{justify-content:center}
 
 /* utility: push element to the right inside .student-exam-actions */
 .student-exam-actions .align-right{margin-left:auto}
@@ -1026,7 +1029,8 @@ kbd{display:inline-flex;align-items:center;justify-content:center;min-width:22px
   .student-preview-banner h2,.student-summary-hero h2,.student-question-card h3{font-size:26px}
   .student-preview-banner__stats,.student-summary-stats,.student-test-grid{grid-template-columns:1fr}
   .student-preview-panel,.student-exam-panel,.student-question-card,.student-feedback-card,.student-summary-card{padding:18px}
-  .student-summary-card__header,.student-feedback-card__header,.student-exam-actions{flex-direction:column;align-items:flex-start}
+  .student-summary-card__header,.student-feedback-card__header{flex-direction:column;align-items:flex-start}
+  .student-exam-actions{align-items:center}
   .student-choice-option{grid-template-columns:20px 1fr;padding:14px}
   .student-score-orb{width:180px;height:180px}
   .student-score-orb__inner{width:132px;height:132px}
