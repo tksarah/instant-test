@@ -269,6 +269,7 @@ function buildTestSummaryForStudent(testId, studentId, sessionId){
               text: q.text,
               points: qTotal,
               correct: correct,
+              explanation: String(q.explanation || '').trim(),
               given_choice_ids: uniqueGiven,
               correct_choice_ids: correctIds
             };
