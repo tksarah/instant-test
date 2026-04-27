@@ -27,6 +27,10 @@ function assert(cond, msg){
     console.log(JSON.stringify(before, null, 2));
     const beforeQ1 = (Array.isArray(before.body) ? before.body.find(q=>q.id===1) : null);
     const beforeChoicesCount = beforeQ1 ? (beforeQ1.choices ? beforeQ1.choices.length : 0) : null;
+    if(beforeQ1 && Array.isArray(beforeQ1.choices)){
+      assert(!('is_correct' in beforeQ1), 'question data should not expose is_correct');
+      beforeQ1.choices.forEach(choice => assert(!('is_correct' in choice), 'choice data should not expose is_correct'));
+    }
 
     console.log('UPDATE QUESTION 1 (text,type,points,explanation,public)');
     const qUpdate = await req('PUT','/api/questions/1', { text: '編集済みの問題文', type: 'single', points: 2, explanation: '解説を追加', public: 1 });
@@ -55,9 +59,10 @@ function assert(cond, msg){
     const afterQ1 = (Array.isArray(after.body) ? after.body.find(q=>q.id===1) : null);
     assert(afterQ1, 'question 1 exists after update');
 
-    assert(afterQ1.explanation === '解説を追加', 'explanation updated');
-    const publicVal = (typeof afterQ1.public !== 'undefined') ? (parseInt(afterQ1.public, 10) || 0) : null;
-    assert(publicVal === 1, 'question public flag updated');
+    assert(typeof afterQ1.explanation === 'undefined', 'explanation should stay hidden from student view');
+    assert(typeof afterQ1.public === 'undefined', 'public flag should not be exposed to student view');
+    assert(!('is_correct' in afterQ1), 'question data should not expose is_correct');
+    (afterQ1.choices || []).forEach(choice => assert(!('is_correct' in choice), 'choice data should not expose is_correct'));
 
     if(beforeChoicesCount !== null){
       const expected = beforeChoicesCount + 1;

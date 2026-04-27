@@ -681,8 +681,25 @@ app.get('/api/tests/:testId/questions', (req, res) => {
         if(err2) return res.status(500).json({ error: err2.message });
         const map = {};
         choices.forEach(c => { map[c.question_id] = map[c.question_id] || []; map[c.question_id].push(c); });
-        // attach choices
-        let out = questions.map(q => ({ ...q, choices: (map[q.id] || []).slice() }));
+        // attach choices, but only expose correctness to authenticated teachers
+        let out = questions.map(q => {
+          const questionChoices = (map[q.id] || []).slice();
+          if(req.teacher){
+            return { ...q, choices: questionChoices };
+          }
+          return {
+            id: q.id,
+            test_id: q.test_id,
+            type: q.type,
+            text: q.text,
+            points: q.points,
+            choices: questionChoices.map(choice => ({
+              id: choice.id,
+              question_id: choice.question_id,
+              text: choice.text
+            }))
+          };
+        });
         // if randomize flagged on test, shuffle questions and choices
         if(shouldRandomize){
           const shuffle = arr => {
@@ -830,10 +847,8 @@ app.post('/api/submit-answer', (req, res) => {
       });
     }
     Promise.all(ops).then(()=>{
-      // fetch question explanation if any
-      db.get('SELECT explanation FROM questions WHERE id=?', [question_id], (er, qrow)=>{
-        res.json({ correct, correct_choice_ids: correctIds, explanation: qrow? qrow.explanation : '' });
-      });
+      // Do not expose answer keys or per-question correctness while the test is in progress.
+      res.json({ accepted: true });
     }).catch(e=>res.status(500).json({ error: e.message }));
   });
   });

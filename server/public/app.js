@@ -971,8 +971,11 @@
       if(q.type === 'multiple') payload.choice_ids = currentSelection;
       else payload.choice_id = currentSelection && currentSelection[0] ? currentSelection[0] : null;
       fetch('/api/submit-answer', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) }).then(r=>r.json()).then(j=>{
-        setLastResult(j);
-        setResultsSummary(prev=> prev.concat([{ question: q, selected: currentSelection.slice(), correct: !!j.correct, correct_choice_ids: j.correct_choice_ids || [], explanation: j.explanation }]) );
+        if(j && j.error){
+          setMessage(j.error);
+          return;
+        }
+        nextQuestion();
       }).catch(()=> setMessage('送信エラー')).finally(function(){ setStudentBusyLabel(''); });
     }
 
@@ -1301,12 +1304,8 @@
       const q = currentQuestions[currentIndex];
       if(!q) return e('div', { className: 'task-empty' }, '問題がありません');
 
-      const answeredCount = Math.min(currentQuestions.length, lastResult ? currentIndex + 1 : currentIndex);
+      const answeredCount = currentIndex;
       const progressPercent = currentQuestions.length ? Math.round(answeredCount / currentQuestions.length * 100) : 0;
-      const correctChoiceTexts = (lastResult && lastResult.correct_choice_ids ? lastResult.correct_choice_ids : []).map(function(id){
-        var choice = (q.choices || []).find(function(item){ return item.id == id; });
-        return choice ? choice.text : String(id);
-      }).filter(Boolean);
 
       return e('div', { className: 'student-exam-shell' },
         e('section', { className: 'student-exam-main' },
@@ -1335,45 +1334,19 @@
                 e('span', { className: 'student-question-card__type-label' }, q && q.type === 'multiple' ? '複数選択' : '１つ選択')
               ),
             e('h3', null, q.text),
-            e('p', { className: 'student-question-card__hint' }, lastResult ? '答えと解説を確認して、次の問題へ進みます。' : '選んだあとすぐに答え合わせできるので、テンポよく学習できます。'),
+            e('p', { className: 'student-question-card__hint' }, ''),
             e('div', { className: 'student-choice-list' }, (q.choices || []).map(function(c){
               const selected = currentSelection.includes(c.id);
-              const correct = !!lastResult && (lastResult.correct_choice_ids || []).includes(c.id);
-              const incorrect = !!lastResult && selected && !correct;
               const inputType = q.type === 'multiple' ? 'checkbox' : 'radio';
-              return e('label', { key: c.id, className: cx('student-choice-option', selected && 'is-selected', lastResult && 'is-locked', correct && 'is-correct', incorrect && 'is-incorrect') },
-                e('input', { type: inputType, name: 'q' + q.id, checked: selected, disabled: !!lastResult, onChange: function(ev){ selectChoice(q, c.id, q.type === 'multiple' ? ev.target.checked : true); } }),
+              return e('label', { key: c.id, className: cx('student-choice-option', selected && 'is-selected') },
+                e('input', { type: inputType, name: 'q' + q.id, checked: selected, disabled: !!studentBusyLabel, onChange: function(ev){ selectChoice(q, c.id, q.type === 'multiple' ? ev.target.checked : true); } }),
                 e('span', { className: 'student-choice-option__marker' }),
                 e('span', { className: 'student-choice-option__text' }, c.text)
               );
             }))
           ),
-          lastResult ? e('section', { className: cx('student-feedback-card', lastResult.correct ? 'is-correct' : 'is-incorrect') },
-            e('div', { className: 'student-feedback-card__header' },
-              e('div', null,
-                // title removed: previously showed 'ミニふりかえり'
-                e('h3', null, lastResult.correct ? 'よくできました' : 'ここは見直そう')
-              ),
-              e('span', { className: cx('student-status-pill', lastResult.correct ? 'is-correct' : 'is-incorrect') }, lastResult.correct ? '理解OK' : '見直し')
-            ),
-            e('div', { className: 'student-feedback-card__body' },
-              e('div', { className: 'student-summary-row' },
-                e('span', { className: 'student-summary-row__label' }, '正答'),
-                e('strong', null, formatAnswerTexts(correctChoiceTexts, '設定なし'))
-              ),
-              lastResult.explanation ? e('div', { className: 'student-summary-row student-summary-row-note' },
-                e('span', { className: 'student-summary-row__label' }, '解説'),
-                e('span', null, lastResult.explanation)
-              ) : null
-            ),
-            e('div', { className: 'student-exam-actions' },
-              currentIndex + 1 < currentQuestions.length
-                ? e('button', { onClick: function(){ nextQuestion(); }, className: 'btn btn-primary', type: 'button' }, '次の問題へ')
-                : null
-            )
-          ) : e('div', { className: 'student-exam-actions' },
-            e('span', { className: 'student-action-hint' }, currentSelection.length ? 'この答えでチェックします。' : '1つ以上選ぶとチェックできます。'),
-            e('button', { onClick: submitCurrentAnswer, className: 'btn btn-primary', type: 'button', disabled: !currentSelection.length || !!studentBusyLabel }, studentBusyLabel ? '送信中...' : '答え合わせ')
+          e('div', { className: 'student-exam-actions' },
+            e('button', { onClick: submitCurrentAnswer, className: 'btn btn-primary', type: 'button', disabled: !currentSelection.length || !!studentBusyLabel }, studentBusyLabel ? '送信中...' : '回答を送信')
           )
         )
       );
@@ -1381,13 +1354,7 @@
 
     const studentNode = e('section', { className: 'task-page' },
       e('div', { className: 'task-section-card' },
-        renderStudent(),
-        /* 最後の問題で解説カードの下に表示するボタン */
-        (lastResult && currentIndex + 1 >= currentQuestions.length)
-          ? e('div', { className: 'student-exam-actions student-exam-actions--under-explanation' },
-              e('button', { onClick: function(){ nextQuestion(); }, className: 'btn btn-review btn-center', type: 'button' }, 'ふりかえりを見る')
-            )
-          : null
+        renderStudent()
       )
     );
 
