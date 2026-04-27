@@ -62,16 +62,22 @@ CMD ["node", "index.js"]
 6) `docker-compose.yml` の確認
 - `app` サービスの `build.context` が `./server` になっていること
 - `./data/data.sqlite` を `/app/data.sqlite` にマウントしていること
-- `server/public` を `/app/public:ro` としてマウントしていること
+- `./server` を `/app` にマウントしていること
+- `server_node_modules` を `/app/node_modules` にマウントしていること
+- 静的ファイルは `./server` の中身として `/app/public` に反映されること
 
-7) イメージビルドと起動
+7) サーバーコードを変更したとき
+- Docker コンテナはホスト側の `server/` をそのまま参照するので、`server/index.js` や API の修正は再ビルドなしで反映される
+- Dockerfile 自体や依存関係を変えた場合だけ `docker compose build app` を実行する
+
+8) イメージビルドと起動
 ```bash
 # 初回はキャッシュ無しで確実にビルド
 docker compose build --no-cache app
 docker compose up -d
 ```
 
-8) 動作確認
+9) 動作確認
 ```bash
 docker compose ps
 docker compose logs -f app
