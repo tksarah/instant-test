@@ -1481,16 +1481,6 @@
           if(!r.ok) throw new Error('teacher_summary_unavailable');
           return r.json();
         })
-        .catch(function(){
-          return fetch('/api/studentAnswers?student_id=' + encodeURIComponent(row.studentId || '') + '&test_id=' + encodeURIComponent(testId))
-            .then(function(r){
-              if(!r.ok) throw new Error('student_answers_unavailable');
-              return r.json();
-            })
-            .then(function(answerRows){
-              return buildSummaryFromAnswerRows(questionsForTest, Array.isArray(answerRows) ? answerRows : [], sessionId);
-            });
-        })
         .then(function(summary){
           reportSummaryCacheRef.current[cacheKey] = summary;
           return summary;

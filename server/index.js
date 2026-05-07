@@ -67,6 +67,58 @@ function clearTeacherSessionCookie(res){
   res.setHeader('Set-Cookie', 'teacher_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
 }
 
+const studentSessionSecret = process.env.STUDENT_SESSION_SECRET || process.env.SESSION_SECRET || process.env.ADMIN_PASSWORD || crypto.randomBytes(32).toString('hex');
+
+function signStudentSession(studentId, classId){
+  return crypto.createHmac('sha256', studentSessionSecret).update(`${studentId}:${classId}`).digest('hex');
+}
+
+function makeStudentSessionToken(studentId, classId){
+  return `${studentId}.${classId}.${signStudentSession(studentId, classId)}`;
+}
+
+function parseStudentSessionToken(token){
+  const raw = typeof token === 'string' ? token.trim() : '';
+  const parts = raw.split('.');
+  if(parts.length !== 3) return null;
+  const studentId = parseInt(parts[0], 10);
+  const classId = parseInt(parts[1], 10);
+  const sig = parts[2];
+  if(!studentId || !classId || !sig) return null;
+  const expected = signStudentSession(studentId, classId);
+  if(!timingSafeEqualStr(sig, expected)) return null;
+  return { studentId, classId };
+}
+
+function setStudentSessionCookie(res, token, maxAgeSec){
+  const safeAge = Math.max(0, parseInt(maxAgeSec, 10) || 0);
+  const cookie = `student_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${safeAge}`;
+  const existing = res.getHeader('Set-Cookie');
+  if(Array.isArray(existing)){
+    res.setHeader('Set-Cookie', existing.concat(cookie));
+    return;
+  }
+  if(existing){
+    res.setHeader('Set-Cookie', [existing, cookie]);
+    return;
+  }
+  res.setHeader('Set-Cookie', cookie);
+}
+
+function clearStudentSessionCookie(res){
+  const cookie = 'student_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0';
+  const existing = res.getHeader('Set-Cookie');
+  if(Array.isArray(existing)){
+    res.setHeader('Set-Cookie', existing.concat(cookie));
+    return;
+  }
+  if(existing){
+    res.setHeader('Set-Cookie', [existing, cookie]);
+    return;
+  }
+  res.setHeader('Set-Cookie', cookie);
+}
+
 function dbGetAsync(sql, params){
   return new Promise((resolve, reject) => {
     db.get(sql, params || [], (err, row) => {
@@ -178,6 +230,29 @@ app.use((req, res, next) => {
   );
 });
 
+app.use((req, res, next) => {
+  const cookies = parseCookies(req.headers.cookie);
+  const token = cookies.student_session;
+  if(!token) return next();
+  const parsed = parseStudentSessionToken(token);
+  if(!parsed){
+    clearStudentSessionCookie(res);
+    return next();
+  }
+  db.get('SELECT id, name, class_id FROM students WHERE id=? AND class_id=?', [parsed.studentId, parsed.classId], (err, row) => {
+    if(err || !row){
+      clearStudentSessionCookie(res);
+      return next();
+    }
+    req.student = {
+      id: row.id,
+      name: row.name || '',
+      class_id: row.class_id
+    };
+    next();
+  });
+});
+
 function requireTeacher(req, res, next){
   if(!req.teacher) return res.status(401).json({ error: 'unauthorized' });
   next();
@@ -228,13 +303,7 @@ function buildTestSummaryForStudent(testId, studentId, sessionId){
         });
         const fetchAnswers = sessionId
           ? function(done){
-              db.all('SELECT * FROM student_answers WHERE session_id=?', [sessionId], (sessionErr, sessionAnswers) => {
-                if(sessionErr) return done(sessionErr);
-                if(sessionAnswers && sessionAnswers.length > 0){
-                  return done(null, sessionAnswers);
-                }
-                db.all('SELECT * FROM student_answers WHERE student_id=? AND test_id=?', [studentId, testId], done);
-              });
+              db.all('SELECT * FROM student_answers WHERE session_id=? AND student_id=? AND test_id=?', [sessionId, studentId, testId], done);
             }
           : function(done){
               db.all('SELECT * FROM student_answers WHERE student_id=? AND test_id=?', [studentId, testId], done);
@@ -286,6 +355,64 @@ function ensurePublicTestAccess(res, testId, cb){
     if(err) return res.status(500).json({ error: err.message });
     if(!row) return res.status(404).json({ error: 'not_found' });
     cb(row);
+  });
+}
+
+function authorizeStudentTestAccess(req, res, testId, studentId, cb){
+  const requestedStudentId = parseInt(studentId, 10);
+  const requestedTestId = parseInt(testId, 10);
+  if(!requestedStudentId || !requestedTestId){
+    return res.status(400).json({ error: 'student_id and test_id required' });
+  }
+
+  (async () => {
+    try{
+      if(req.teacher){
+        const ownedTest = await dbGetAsync('SELECT id, class_id, public, teacher_id FROM tests WHERE id=? AND teacher_id=?', [requestedTestId, req.teacher.id]);
+        if(!ownedTest) return res.status(404).json({ error: 'not_found' });
+        return cb({ studentId: requestedStudentId, test: ownedTest, actor: 'teacher' });
+      }
+
+      const test = await dbGetAsync('SELECT id, class_id, public FROM tests WHERE id=? AND public=1', [requestedTestId]);
+      if(!test) return res.status(404).json({ error: 'not_found' });
+      if(!req.student) return res.status(401).json({ error: 'unauthorized' });
+      if(req.student.id !== requestedStudentId) return res.status(403).json({ error: 'forbidden' });
+      if(Number(req.student.class_id) !== Number(test.class_id)) return res.status(403).json({ error: 'forbidden' });
+      return cb({ studentId: requestedStudentId, test: test, actor: 'student' });
+    }catch(err){
+      return res.status(500).json({ error: err.message });
+    }
+  })();
+}
+
+function authorizeSummaryAccess(req, res, testId, studentId, sessionId, cb){
+  const requestedSessionId = sessionId ? parseInt(sessionId, 10) : null;
+  if(!studentId) return res.status(400).json({ error: 'student_id required' });
+  if(sessionId && !requestedSessionId) return res.status(400).json({ error: 'invalid_session_id' });
+
+  authorizeStudentTestAccess(req, res, testId, studentId, ({ studentId: authorizedStudentId, actor }) => {
+    (async () => {
+      try{
+        if(requestedSessionId){
+          const session = await dbGetAsync('SELECT id FROM exam_sessions WHERE id=? AND student_id=? AND test_id=?', [requestedSessionId, authorizedStudentId, testId]);
+          if(!session){
+            return res.status(actor === 'teacher' ? 404 : 403).json({ error: actor === 'teacher' ? 'not_found' : 'forbidden' });
+          }
+        }
+
+        if(actor !== 'teacher'){
+          const participation = await dbGetAsync(
+            'SELECT 1 AS ok FROM exam_sessions WHERE student_id=? AND test_id=? UNION SELECT 1 AS ok FROM student_answers WHERE student_id=? AND test_id=? LIMIT 1',
+            [authorizedStudentId, testId, authorizedStudentId, testId]
+          );
+          if(!participation) return res.status(403).json({ error: 'forbidden' });
+        }
+
+        return cb({ studentId: authorizedStudentId, sessionId: requestedSessionId });
+      }catch(err){
+        return res.status(500).json({ error: err.message });
+      }
+    })();
   });
 }
 
@@ -805,7 +932,9 @@ app.post('/api/students', (req, res) => {
     const code = Math.random().toString(36).slice(2,8).toUpperCase();
     db.run('INSERT INTO students (class_id, name, code) VALUES (?,?,?)', [cls.id, name, code], function(err2){
       if(err2) return res.status(500).json({ error: err2.message });
-      res.json({ id: this.lastID, name, code, class_id: cls.id });
+      const studentId = this.lastID;
+      setStudentSessionCookie(res, makeStudentSessionToken(studentId, cls.id), 60 * 60 * 12);
+      res.json({ id: studentId, name, code, class_id: cls.id });
     });
   });
 });
@@ -814,54 +943,64 @@ app.post('/api/students', (req, res) => {
 app.post('/api/submit-answer', (req, res) => {
   const { student_id, test_id, question_id, choice_id, choice_ids, session_id } = req.body;
   if(!student_id || !test_id || !question_id) return res.status(400).json({ error: 'student_id,test_id,question_id required' });
-  // only allow answering public tests
-  ensurePublicTestAccess(res, test_id, () => {
-  const submitted = [];
-  if(Array.isArray(choice_ids)) submitted.push(...choice_ids.map(x=>parseInt(x)));
-  else if(choice_id) submitted.push(parseInt(choice_id));
+  authorizeStudentTestAccess(req, res, test_id, student_id, ({ studentId: authorizedStudentId }) => {
+    const submitted = [];
+    if(Array.isArray(choice_ids)) submitted.push(...choice_ids.map(x=>parseInt(x, 10)).filter(Boolean));
+    else if(choice_id) submitted.push(parseInt(choice_id, 10));
 
-  db.all('SELECT id FROM choices WHERE question_id=? AND is_correct=1', [question_id], (err, correctRows)=>{
-    if(err) return res.status(500).json({ error: err.message });
-    const correctIds = correctRows.map(r=>r.id);
-    // determine correctness
-    let correct = false;
-    if(submitted.length === 0){ correct = false; }
-    else {
-      // compare sets
-      const s1 = new Set(submitted);
-      const s2 = new Set(correctIds);
-      if(s1.size === s2.size){
-        correct = [...s1].every(x => s2.has(x));
-      } else correct = false;
-    }
-    // store answers: if no submitted choices, insert a row with null choice_id
-    const ops = [];
-    if(submitted.length === 0){
-      ops.push(new Promise((resolve, reject)=>{
-        db.run('INSERT INTO student_answers (student_id, test_id, question_id, choice_id, correct, session_id) VALUES (?,?,?,?,?,?)', [student_id, test_id, null, null, correct?1:0, session_id||null], function(e){ if(e) reject(e); else resolve(); });
-      }));
-    } else {
-      submitted.forEach(cid => {
-        ops.push(new Promise((resolve, reject)=>{
-          db.run('INSERT INTO student_answers (student_id, test_id, question_id, choice_id, correct, session_id) VALUES (?,?,?,?,?,?)', [student_id, test_id, question_id, cid, correct?1:0, session_id||null], function(e){ if(e) reject(e); else resolve(); });
-        }));
+    db.get('SELECT id, test_id FROM questions WHERE id=? AND test_id=?', [question_id, test_id], (questionErr, questionRow) => {
+      if(questionErr) return res.status(500).json({ error: questionErr.message });
+      if(!questionRow) return res.status(400).json({ error: 'invalid_question_id' });
+
+      const continueWithAnswerInsert = () => {
+        db.all('SELECT id FROM choices WHERE question_id=? AND is_correct=1', [question_id], (err, correctRows)=>{
+          if(err) return res.status(500).json({ error: err.message });
+          const correctIds = correctRows.map(r=>r.id);
+          let correct = false;
+          if(submitted.length > 0){
+            const s1 = new Set(submitted);
+            const s2 = new Set(correctIds);
+            if(s1.size === s2.size){
+              correct = [...s1].every(x => s2.has(x));
+            }
+          }
+          const ops = [];
+          if(submitted.length === 0){
+            ops.push(new Promise((resolve, reject)=>{
+              db.run('INSERT INTO student_answers (student_id, test_id, question_id, choice_id, correct, session_id) VALUES (?,?,?,?,?,?)', [authorizedStudentId, test_id, null, null, correct?1:0, session_id||null], function(e){ if(e) reject(e); else resolve(); });
+            }));
+          } else {
+            submitted.forEach(cid => {
+              ops.push(new Promise((resolve, reject)=>{
+                db.run('INSERT INTO student_answers (student_id, test_id, question_id, choice_id, correct, session_id) VALUES (?,?,?,?,?,?)', [authorizedStudentId, test_id, question_id, cid, correct?1:0, session_id||null], function(e){ if(e) reject(e); else resolve(); });
+              }));
+            });
+          }
+          Promise.all(ops).then(()=>{
+            res.json({ accepted: true });
+          }).catch(e=>res.status(500).json({ error: e.message }));
+        });
+      };
+
+      if(!session_id) return continueWithAnswerInsert();
+      db.get('SELECT id FROM exam_sessions WHERE id=? AND student_id=? AND test_id=?', [session_id, authorizedStudentId, test_id], (sessionErr, sessionRow) => {
+        if(sessionErr) return res.status(500).json({ error: sessionErr.message });
+        if(!sessionRow) return res.status(403).json({ error: 'forbidden' });
+        continueWithAnswerInsert();
       });
-    }
-    Promise.all(ops).then(()=>{
-      // Do not expose answer keys or per-question correctness while the test is in progress.
-      res.json({ accepted: true });
-    }).catch(e=>res.status(500).json({ error: e.message }));
-  });
+    });
   });
 });
 
 // Fetch student answers (filter by student_id and test_id)
-app.get('/api/studentAnswers', (req, res) => {
+app.get('/api/studentAnswers', requireTeacher, (req, res) => {
   const { student_id, test_id } = req.query;
   if(!student_id || !test_id) return res.status(400).json({ error: 'student_id and test_id required' });
-  db.all('SELECT * FROM student_answers WHERE student_id=? AND test_id=?', [student_id, test_id], (err, rows)=>{
-    if(err) return res.status(500).json({ error: err.message });
-    res.json(rows);
+  ensureTeacherOwnsTest(req, res, test_id, () => {
+    db.all('SELECT * FROM student_answers WHERE student_id=? AND test_id=?', [student_id, test_id], (err, rows)=>{
+      if(err) return res.status(500).json({ error: err.message });
+      res.json(rows);
+    });
   });
 });
 
@@ -870,9 +1009,8 @@ app.get('/api/tests/:testId/summary', (req, res) => {
   const testId = req.params.testId;
   const studentId = req.query.student_id;
   const sessionId = req.query.session_id;
-  if(!studentId) return res.status(400).json({ error: 'student_id required' });
-  ensurePublicTestAccess(res, testId, () => {
-    buildTestSummaryForStudent(testId, studentId, sessionId)
+  authorizeSummaryAccess(req, res, testId, studentId, sessionId, ({ studentId: authorizedStudentId, sessionId: authorizedSessionId }) => {
+    buildTestSummaryForStudent(testId, authorizedStudentId, authorizedSessionId)
       .then(summary => res.json(summary))
       .catch(summaryErr => res.status(500).json({ error: summaryErr.message }));
   });
@@ -882,9 +1020,8 @@ app.get('/api/teacher/tests/:testId/summary', requireTeacher, (req, res) => {
   const testId = req.params.testId;
   const studentId = req.query.student_id;
   const sessionId = req.query.session_id;
-  if(!studentId) return res.status(400).json({ error: 'student_id required' });
-  ensureTeacherOwnsTest(req, res, testId, () => {
-    buildTestSummaryForStudent(testId, studentId, sessionId)
+  authorizeSummaryAccess(req, res, testId, studentId, sessionId, ({ studentId: authorizedStudentId, sessionId: authorizedSessionId }) => {
+    buildTestSummaryForStudent(testId, authorizedStudentId, authorizedSessionId)
       .then(summary => res.json(summary))
       .catch(summaryErr => res.status(500).json({ error: summaryErr.message }));
   });
@@ -1003,12 +1140,12 @@ app.get('/api/exams', requireTeacher, (req, res) => {
 app.post('/api/exam-sessions', (req, res) => {
   const { student_id, test_id } = req.body;
   if(!student_id || !test_id) return res.status(400).json({ error: 'student_id and test_id required' });
-  ensurePublicTestAccess(res, test_id, () => {
-  const started_at = new Date().toISOString();
-  db.run('INSERT INTO exam_sessions (student_id, test_id, started_at, status) VALUES (?,?,?,?)', [student_id, test_id, started_at, 'in_progress'], function(err){
-    if(err) return res.status(500).json({ error: err.message });
-    res.json({ id: this.lastID, student_id, test_id, started_at, status: 'in_progress' });
-  });
+  authorizeStudentTestAccess(req, res, test_id, student_id, ({ studentId: authorizedStudentId }) => {
+    const started_at = new Date().toISOString();
+    db.run('INSERT INTO exam_sessions (student_id, test_id, started_at, status) VALUES (?,?,?,?)', [authorizedStudentId, test_id, started_at, 'in_progress'], function(err){
+      if(err) return res.status(500).json({ error: err.message });
+      res.json({ id: this.lastID, student_id: authorizedStudentId, test_id, started_at, status: 'in_progress' });
+    });
   });
 });
 
@@ -1019,60 +1156,57 @@ app.put('/api/exam-sessions/:id/finish', (req, res) => {
   db.get('SELECT * FROM exam_sessions WHERE id=?', [id], (err, session) => {
     if(err) return res.status(500).json({ error: err.message });
     if(!session) return res.status(404).json({ error: 'session_not_found' });
-    ensurePublicTestAccess(res, session.test_id, () => {
-    // fetch questions for this test
-    db.all('SELECT id, points FROM questions WHERE test_id=?', [session.test_id], (err2, questions) => {
-      if(err2) return res.status(500).json({ error: err2.message });
-      const qids = (questions || []).map(q => q.id);
-      if(qids.length === 0){
-        const duration = session.started_at ? Math.max(0, Math.round((Date.parse(finished_at) - Date.parse(session.started_at))/1000)) : null;
-        db.run('UPDATE exam_sessions SET finished_at=?, duration_sec=?, score=?, max_score=?, percent=?, status=? WHERE id=?', [finished_at, duration, 0, 0, 0, 'completed', id], function(eu){
-          if(eu) return res.status(500).json({ error: eu.message });
-          db.get('SELECT * FROM exam_sessions WHERE id=?', [id], (e, updated) => { if(e) return res.status(500).json({ error: e.message }); res.json(updated); });
-        });
-        return;
-      }
-      db.all(`SELECT * FROM choices WHERE question_id IN (${qids.join(',')})`, (err3, choices) => {
-        if(err3) return res.status(500).json({ error: err3.message });
-        // fetch answers for this session
-        db.all('SELECT * FROM student_answers WHERE session_id=?', [id], (err4, answers) => {
-          if(err4) return res.status(500).json({ error: err4.message });
-          const proceedWith = (answers && answers.length > 0) ? answers : null;
-          if(!proceedWith){
-            // fallback: use all answers for this student/test
-            db.all('SELECT * FROM student_answers WHERE student_id=? AND test_id=?', [session.student_id, session.test_id], (err5, fallbackAnswers) => {
-              if(err5) return res.status(500).json({ error: err5.message });
-              computeAndSave(fallbackAnswers);
-            });
-          } else {
-            computeAndSave(proceedWith);
-          }
+    authorizeStudentTestAccess(req, res, session.test_id, session.student_id, () => {
+      db.all('SELECT id, points FROM questions WHERE test_id=?', [session.test_id], (err2, questions) => {
+        if(err2) return res.status(500).json({ error: err2.message });
+        const qids = (questions || []).map(q => q.id);
+        if(qids.length === 0){
+          const duration = session.started_at ? Math.max(0, Math.round((Date.parse(finished_at) - Date.parse(session.started_at))/1000)) : null;
+          db.run('UPDATE exam_sessions SET finished_at=?, duration_sec=?, score=?, max_score=?, percent=?, status=? WHERE id=?', [finished_at, duration, 0, 0, 0, 'completed', id], function(eu){
+            if(eu) return res.status(500).json({ error: eu.message });
+            db.get('SELECT * FROM exam_sessions WHERE id=?', [id], (e, updated) => { if(e) return res.status(500).json({ error: e.message }); res.json(updated); });
+          });
+          return;
+        }
+        db.all(`SELECT * FROM choices WHERE question_id IN (${qids.join(',')})`, (err3, choices) => {
+          if(err3) return res.status(500).json({ error: err3.message });
+          db.all('SELECT * FROM student_answers WHERE session_id=? AND student_id=? AND test_id=?', [id, session.student_id, session.test_id], (err4, answers) => {
+            if(err4) return res.status(500).json({ error: err4.message });
+            const proceedWith = (answers && answers.length > 0) ? answers : null;
+            if(!proceedWith){
+              db.all('SELECT * FROM student_answers WHERE student_id=? AND test_id=?', [session.student_id, session.test_id], (err5, fallbackAnswers) => {
+                if(err5) return res.status(500).json({ error: err5.message });
+                computeAndSave(fallbackAnswers);
+              });
+            } else {
+              computeAndSave(proceedWith);
+            }
 
-          function computeAndSave(answersForSession){
-            const choicesMap = {};
-            (choices || []).forEach(ch => { choicesMap[ch.question_id] = choicesMap[ch.question_id] || []; choicesMap[ch.question_id].push(ch); });
-            const answersMap = {};
-            (answersForSession || []).forEach(a => { answersMap[a.question_id] = answersMap[a.question_id] || []; if(a.choice_id !== null && typeof a.choice_id !== 'undefined') answersMap[a.question_id].push(a.choice_id); });
-            let total = 0, earned = 0;
-            (questions || []).forEach(q => {
-              const correctIds = (choicesMap[q.id] || []).filter(x => x.is_correct==1).map(x => x.id);
-              total += q.points || 1;
-              const given = Array.from(new Set((answersMap[q.id] || []).map(x => parseInt(x))));
-              if(given.length === 0) return;
-              const s1 = new Set(given);
-              const s2 = new Set(correctIds.map(x => parseInt(x)));
-              if(s1.size === s2.size && [...s1].every(x => s2.has(x))) earned += q.points || 1;
-            });
-            const percent = total>0 ? (earned/total*100) : 0;
-            const duration = session.started_at ? Math.max(0, Math.round((Date.parse(finished_at) - Date.parse(session.started_at))/1000)) : null;
-            db.run('UPDATE exam_sessions SET finished_at=?, duration_sec=?, score=?, max_score=?, percent=?, status=? WHERE id=?', [finished_at, duration, earned, total, percent, 'completed', id], function(upErr){
-              if(upErr) return res.status(500).json({ error: upErr.message });
-              db.get('SELECT * FROM exam_sessions WHERE id=?', [id], (e, updated) => { if(e) return res.status(500).json({ error: e.message }); res.json(updated); });
-            });
-          }
+            function computeAndSave(answersForSession){
+              const choicesMap = {};
+              (choices || []).forEach(ch => { choicesMap[ch.question_id] = choicesMap[ch.question_id] || []; choicesMap[ch.question_id].push(ch); });
+              const answersMap = {};
+              (answersForSession || []).forEach(a => { answersMap[a.question_id] = answersMap[a.question_id] || []; if(a.choice_id !== null && typeof a.choice_id !== 'undefined') answersMap[a.question_id].push(a.choice_id); });
+              let total = 0, earned = 0;
+              (questions || []).forEach(q => {
+                const correctIds = (choicesMap[q.id] || []).filter(x => x.is_correct==1).map(x => x.id);
+                total += q.points || 1;
+                const given = Array.from(new Set((answersMap[q.id] || []).map(x => parseInt(x, 10))));
+                if(given.length === 0) return;
+                const s1 = new Set(given);
+                const s2 = new Set(correctIds.map(x => parseInt(x, 10)));
+                if(s1.size === s2.size && [...s1].every(x => s2.has(x))) earned += q.points || 1;
+              });
+              const percent = total>0 ? (earned/total*100) : 0;
+              const duration = session.started_at ? Math.max(0, Math.round((Date.parse(finished_at) - Date.parse(session.started_at))/1000)) : null;
+              db.run('UPDATE exam_sessions SET finished_at=?, duration_sec=?, score=?, max_score=?, percent=?, status=? WHERE id=?', [finished_at, duration, earned, total, percent, 'completed', id], function(upErr){
+                if(upErr) return res.status(500).json({ error: upErr.message });
+                db.get('SELECT * FROM exam_sessions WHERE id=?', [id], (e, updated) => { if(e) return res.status(500).json({ error: e.message }); res.json(updated); });
+              });
+            }
+          });
         });
       });
-    });
     });
   });
 });

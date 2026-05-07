@@ -1,13 +1,15 @@
 const http = require('http');
 
-function req(method, path, data){
-  const opts = { hostname: 'localhost', port: 3000, path, method, headers: { 'Content-Type': 'application/json' } };
+const port = parseInt(process.env.PORT, 10) || 3000;
+
+function req(method, path, data, headers){
+  const opts = { hostname: 'localhost', port, path, method, headers: Object.assign({ 'Content-Type': 'application/json' }, headers || {}) };
   return new Promise((resolve, reject)=>{
     const r = http.request(opts, res=>{
       let body='';
       res.on('data', c=> body+=c);
       res.on('end', ()=>{
-        try{ const json = JSON.parse(body); resolve(json); } catch(e){ resolve(body); }
+        try{ const json = JSON.parse(body); resolve({ status: res.statusCode, body: json, headers: res.headers }); } catch(e){ resolve({ status: res.statusCode, body, headers: res.headers }); }
       });
     });
     r.on('error', reject);
@@ -16,27 +18,58 @@ function req(method, path, data){
   });
 }
 
+function extractCookie(headers){
+  const setCookie = headers && headers['set-cookie'];
+  if(!Array.isArray(setCookie) || !setCookie.length) return '';
+  return setCookie.map(cookie => String(cookie).split(';')[0]).join('; ');
+}
+
+function assert(cond, msg){
+  if(!cond){
+    throw new Error(msg);
+  }
+}
+
 (async ()=>{
   try{
-    console.log('CREATE STUDENT');
-    const student = await req('POST','/api/students', { class_id: 1, name: '生徒太郎' });
-    console.log(student);
+    console.log('LIST PUBLIC CLASSES');
+    const classes = await req('GET', '/api/classes');
+    console.log(classes);
+    assert(classes.status === 200 && Array.isArray(classes.body) && classes.body.length > 0, '公開クラスが必要です');
+    const classId = classes.body[0].id;
 
     console.log('\nLIST TESTS');
-    const tests = await req('GET','/api/tests?class_id=1');
+    const tests = await req('GET', '/api/tests?class_id=' + encodeURIComponent(classId) + '&public=1');
     console.log(tests);
+    assert(tests.status === 200 && Array.isArray(tests.body) && tests.body.length > 0, '公開テストが必要です');
+    const testId = tests.body[0].id;
 
-    console.log('\nGET QUESTIONS for test 1');
-    const questions = await req('GET','/api/tests/1/questions');
+    console.log('CREATE STUDENT');
+    const student = await req('POST','/api/students', { class_id: classId, name: '生徒太郎' });
+    console.log(student);
+    assert(student.status === 200 && student.body && student.body.id, '生徒作成に失敗しました');
+    const studentCookie = extractCookie(student.headers);
+    assert(studentCookie, '生徒セッションクッキーが必要です');
+
+    console.log('\nGET QUESTIONS');
+    const questions = await req('GET','/api/tests/' + encodeURIComponent(testId) + '/questions');
     console.log(questions);
+    assert(questions.status === 200 && Array.isArray(questions.body) && questions.body.length > 0, '問題取得に失敗しました');
+    const question = questions.body[0];
+    assert(question && question.id, '問題IDが必要です');
+    const choiceId = Array.isArray(question.choices) && question.choices.length ? question.choices[0].id : null;
+    assert(choiceId, '選択肢IDが必要です');
 
     console.log('\nSUBMIT ANSWER (choice_id=1)');
-    const submit = await req('POST','/api/submit-answer', { student_id: student.id || 1, test_id: 1, question_id: 1, choice_id: 1 });
+    const studentId = student.body.id;
+    const submit = await req('POST','/api/submit-answer', { student_id: studentId, test_id: testId, question_id: question.id, choice_id: choiceId }, { Cookie: studentCookie });
     console.log(submit);
+    assert(submit.status === 200, '回答送信に失敗しました');
 
-    console.log('\nSTUDENT ANSWERS');
-    const answers = await req('GET', `/api/studentAnswers?student_id=${student.id||1}&test_id=1`);
-    console.log(answers);
+    console.log('\nSUMMARY');
+    const summary = await req('GET', `/api/tests/${encodeURIComponent(testId)}/summary?student_id=${encodeURIComponent(studentId)}`, null, { Cookie: studentCookie });
+    console.log(summary);
+    assert(summary.status === 200 && summary.body && Array.isArray(summary.body.details), 'summary 取得に失敗しました');
 
   }catch(e){ console.error('ERROR', e); process.exitCode=1; }
 })();
