@@ -70,13 +70,6 @@ function extractCookie(headers){
     const test = await dbGet('SELECT id, class_id, teacher_id FROM tests WHERE public=1 ORDER BY id ASC LIMIT 1');
     assert(test && test.id, '公開テストが必要です');
 
-    const questions = await req('GET', `/api/tests/${test.id}/questions`);
-    assert(questions.status === 200 && Array.isArray(questions.body) && questions.body.length > 0, '公開テストに問題が必要です');
-    const question = questions.body[0];
-    assert(question && question.id, '問題IDを取得できませんでした');
-    assert(Array.isArray(question.choices) && question.choices.length > 0, '問題に選択肢が必要です');
-    const choice = question.choices[0];
-
     const studentARes = await req('POST', '/api/students', { class_id: test.class_id, name: '認可テストA' });
     assert(studentARes.status === 200 && studentARes.body && studentARes.body.id, 'student A の作成に失敗しました');
     const studentACookie = extractCookie(studentARes.headers);
@@ -99,9 +92,22 @@ function extractCookie(headers){
     assert(sessionARes.status === 200 && sessionARes.body && sessionARes.body.id, 'student A の受験セッション作成に失敗しました');
     const sessionA = sessionARes.body;
 
+    const sessionAQuestions = await req('GET', `/api/exam-sessions/${sessionA.id}/questions`, null, { Cookie: studentACookie });
+    assert(sessionAQuestions.status === 200 && Array.isArray(sessionAQuestions.body) && sessionAQuestions.body.length > 0, 'student A のセッション問題取得に失敗しました');
+    const question = sessionAQuestions.body[0];
+    assert(question && question.id, '問題IDを取得できませんでした');
+    assert(Array.isArray(question.choices) && question.choices.length > 0, '問題に選択肢が必要です');
+    const choice = question.choices[0];
+
     const sessionBRes = await req('POST', '/api/exam-sessions', { student_id: studentB.id, test_id: test.id }, { Cookie: studentBCookie });
     assert(sessionBRes.status === 200 && sessionBRes.body && sessionBRes.body.id, 'student B の受験セッション作成に失敗しました');
     const sessionB = sessionBRes.body;
+
+    const anonymousSessionQuestions = await req('GET', `/api/exam-sessions/${sessionA.id}/questions`);
+    assert(anonymousSessionQuestions.status === 401, '未認証のセッション問題取得は 401 で拒否される必要があります');
+
+    const foreignSessionQuestions = await req('GET', `/api/exam-sessions/${sessionA.id}/questions`, null, { Cookie: studentBCookie });
+    assert(foreignSessionQuestions.status === 403, '他人生徒のセッション問題取得は 403 で拒否される必要があります');
 
     const submitARes = await req('POST', '/api/submit-answer', {
       student_id: studentA.id,
@@ -146,8 +152,7 @@ function extractCookie(headers){
     assert(anonymousAnswers.status === 401, '未認証の studentAnswers 取得は 401 で拒否される必要があります');
 
     const ownSummary = await req('GET', `/api/tests/${test.id}/summary?student_id=${studentA.id}&session_id=${sessionA.id}`, null, { Cookie: studentACookie });
-    assert(ownSummary.status === 200, '本人の summary 取得は成功する必要があります');
-    assert(ownSummary.body && Array.isArray(ownSummary.body.details), 'summary の本文形式が不正です');
+    assert(ownSummary.status === 403, '完了前の summary 取得は 403 で拒否される必要があります');
 
     const studentAnswersAsStudent = await req('GET', `/api/studentAnswers?student_id=${studentA.id}&test_id=${test.id}`, null, { Cookie: studentACookie });
     assert(studentAnswersAsStudent.status === 401, '生徒からの studentAnswers 取得は 401 で拒否される必要があります');
@@ -166,6 +171,10 @@ function extractCookie(headers){
 
     const ownFinish = await req('PUT', `/api/exam-sessions/${sessionA.id}/finish`, null, { Cookie: studentACookie });
     assert(ownFinish.status === 200, '本人の受験終了は成功する必要があります');
+
+    const finishedSummary = await req('GET', `/api/tests/${test.id}/summary?student_id=${studentA.id}&session_id=${sessionA.id}`, null, { Cookie: studentACookie });
+    assert(finishedSummary.status === 200, '完了後の本人 summary 取得は成功する必要があります');
+    assert(finishedSummary.body && Array.isArray(finishedSummary.body.details), 'summary の本文形式が不正です');
 
     teacherToken = crypto.randomBytes(24).toString('hex');
     const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();

@@ -116,6 +116,25 @@
     return Math.max(0, Math.min(100, Math.round(Number(earned || 0) / safeTotal * 100)));
   }
 
+  function getAnswerModeValue(source){
+    const value = source && typeof source === 'object' ? source.answer_mode : source;
+    return value === 'immediate_feedback' ? 'immediate_feedback' : 'deferred_summary';
+  }
+
+  function isImmediateFeedbackMode(source){
+    return getAnswerModeValue(source) === 'immediate_feedback';
+  }
+
+  function getAnswerModeLabel(source){
+    return isImmediateFeedbackMode(source) ? '毎問フィードバック' : '最後にまとめて採点';
+  }
+
+  function getAnswerModeDescription(source){
+    return isImmediateFeedbackMode(source)
+      ? '回答ごとに正解と解説を確認できます。'
+      : '最後にまとめて採点し、振り返りページで見直します。';
+  }
+
   function getTeacherTestManagementState(test, questionCount){
     if(test && test.archived){
       return {
@@ -212,6 +231,7 @@
     const [testName, setTestName] = React.useState('');
     const [testPublic, setTestPublic] = React.useState(false);
     const [testRandomize, setTestRandomize] = React.useState(false);
+    const [testAnswerMode, setTestAnswerMode] = React.useState('deferred_summary');
     const [textForAI, setTextForAI] = React.useState('');
     const [message, setMessage] = React.useState('');
     const [questions, setQuestions] = React.useState([]);
@@ -406,7 +426,7 @@
         window.alert('そのテスト名は既に使われています。別の名前を指定してください');
         return;
       }
-      fetch('/api/tests',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({class_id:selectedClass?selectedClass.id:null, name:testName, public: testPublic, randomize: testRandomize})}).then(r=>r.json()).then(n=>{ setTests(prev=>prev.concat({id:n.id, name:testName, class_id:selectedClass?selectedClass.id:null, public: testPublic?1:0, randomize: testRandomize?1:0, archived: 0})); setTestName(''); setTestPublic(false); setTestRandomize(false); });
+      fetch('/api/tests',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({class_id:selectedClass?selectedClass.id:null, name:testName, public: testPublic, randomize: testRandomize, answer_mode: testAnswerMode})}).then(r=>r.json()).then(n=>{ setTests(prev=>prev.concat({id:n.id, name:testName, class_id:selectedClass?selectedClass.id:null, public: testPublic?1:0, randomize: testRandomize?1:0, answer_mode: n && n.answer_mode ? n.answer_mode : testAnswerMode, archived: 0})); setTestName(''); setTestPublic(false); setTestRandomize(false); setTestAnswerMode('deferred_summary'); });
     }
     function startInlineTestRename(t){
       setEditingTestId(t.id);
@@ -654,6 +674,7 @@
         description: Object.prototype.hasOwnProperty.call(overrides || {}, 'description') ? overrides.description : (test.description || ''),
         public: Object.prototype.hasOwnProperty.call(overrides || {}, 'public') ? overrides.public : (test.public || 0),
         randomize: Object.prototype.hasOwnProperty.call(overrides || {}, 'randomize') ? overrides.randomize : (test.randomize || 0),
+        answer_mode: Object.prototype.hasOwnProperty.call(overrides || {}, 'answer_mode') ? overrides.answer_mode : getAnswerModeValue(test),
         class_id: Object.prototype.hasOwnProperty.call(overrides || {}, 'class_id') ? overrides.class_id : (test.class_id || null),
         archived: Object.prototype.hasOwnProperty.call(overrides || {}, 'archived') ? overrides.archived : (test.archived || 0)
       };
@@ -662,7 +683,7 @@
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify(payload)
       }).then(r=>r.json()).then(updated=>{
-        const merged = Object.assign({}, test, updated, { class_id: payload.class_id, archived: payload.archived });
+        const merged = Object.assign({}, test, updated, { class_id: payload.class_id, archived: payload.archived, answer_mode: payload.answer_mode });
         setTests(prev => prev.map(t => t.id===test.id ? merged : t));
         if(successMessage) setMessage(successMessage);
         return merged;
@@ -939,7 +960,8 @@
                   e('div', { className: 'task-badges teacher-test-card__badges' },
                     t.archived ? e('span', { className: 'badge badge-muted' }, 'アーカイブ済み') : null,
                     e('span', { className: !!t.public ? 'badge badge-success' : 'badge' }, !!t.public ? '公開中' : '下書き'),
-                    e('span', { className: !!t.randomize ? 'badge badge-accent' : 'badge badge-muted' }, !!t.randomize ? 'ランダム' : '固定順')
+                    e('span', { className: !!t.randomize ? 'badge badge-accent' : 'badge badge-muted' }, !!t.randomize ? 'ランダム' : '固定順'),
+                    e('span', { className: isImmediateFeedbackMode(t) ? 'badge badge-accent' : 'badge badge-muted' }, getAnswerModeLabel(t))
                   )
                 ),
                 e('div', { className: 'teacher-test-card__summary-grid' },
@@ -967,7 +989,8 @@
                 isDetailedCard ? e('div', { className: 'teacher-test-card__details' },
                   e('div', { className: 'task-card-controls teacher-test-card__controls' },
                     e('label', { className: 'task-toggle compact' }, e('input', { type: 'checkbox', checked: !!t.public, onChange: function(){ toggleTestPublic(t); }, disabled: !!t.archived }), e('span', null, '公開')),
-                    e('label', { className: 'task-toggle compact' }, e('input', { type: 'checkbox', checked: !!t.randomize, onChange: function(){ updateTestRecord(t, { randomize: t.randomize ? 0 : 1 }, 'ランダム設定更新エラー'); } }), e('span', null, 'ランダム'))
+                    e('label', { className: 'task-toggle compact' }, e('input', { type: 'checkbox', checked: !!t.randomize, onChange: function(){ updateTestRecord(t, { randomize: t.randomize ? 0 : 1 }, 'ランダム設定更新エラー'); } }), e('span', null, 'ランダム')),
+                    e('label', { className: 'task-toggle compact' }, e('input', { type: 'checkbox', checked: isImmediateFeedbackMode(t), onChange: function(){ updateTestRecord(t, { answer_mode: isImmediateFeedbackMode(t) ? 'deferred_summary' : 'immediate_feedback' }, '出題モード更新エラー'); } }), e('span', null, '毎問フィードバック'))
                   ),
                   e('p', { className: 'teacher-inline-note teacher-test-card__detail-note' }, managementState.detail),
                   e('div', { className: 'task-card-footer teacher-card-footer teacher-test-card__secondary-actions' },
@@ -994,7 +1017,8 @@
               e('input', { value: testName, onChange: function(ev){ setTestName(ev.target.value); }, placeholder: '例: 小テスト 4月1週', 'aria-label': 'テスト名' }),
               e('div', { className: 'task-toggle-row' },
                 e('label', { className: 'task-toggle' }, e('input', { type: 'checkbox', checked: testPublic, onChange: function(ev){ setTestPublic(!!ev.target.checked); } }), e('span', null, '公開する')),
-                e('label', { className: 'task-toggle' }, e('input', { type: 'checkbox', checked: testRandomize, onChange: function(ev){ setTestRandomize(!!ev.target.checked); } }), e('span', null, '問題順をランダム化'))
+                e('label', { className: 'task-toggle' }, e('input', { type: 'checkbox', checked: testRandomize, onChange: function(ev){ setTestRandomize(!!ev.target.checked); } }), e('span', null, '問題順をランダム化')),
+                e('label', { className: 'task-toggle' }, e('input', { type: 'checkbox', checked: testAnswerMode === 'immediate_feedback', onChange: function(ev){ setTestAnswerMode(ev.target.checked ? 'immediate_feedback' : 'deferred_summary'); } }), e('span', null, '毎問フィードバック'))
               ),
               e('div', { className: 'task-inline-actions' },
                 e('button', { onClick: createTest, className: 'btn btn-primary', type: 'button' }, '作成'),
@@ -1078,18 +1102,48 @@
       setCurrentIndex(0);
       setResultsSummary([]);
       setCurrentSelection([]);
+      setLastResult(null);
       // Prefer explicitStudent (passed from caller) otherwise fall back to state `student`.
       const useStudent = explicitStudent && explicitStudent.id ? explicitStudent : student;
-      // create exam session if student exists
-      if(useStudent && useStudent.id){
-        try{
-          const resp = await fetch('/api/exam-sessions', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ student_id: useStudent.id, test_id: t.id }) });
-          const js = await resp.json();
-          if(resp.ok && js && js.id) setCurrentSessionId(js.id);
-          else setCurrentSessionId(null);
-        }catch(e){ setCurrentSessionId(null); setMessage('セッション作成エラー'); }
-      } else { setCurrentSessionId(null); }
-      fetch('/api/tests/'+t.id+'/questions').then(r=>r.json()).then(qs=>{ setCurrentQuestions(qs||[]); setLastResult(null); setCurrentSelection([]); }).catch(function(){ setMessage('問題取得エラー'); }).finally(function(){ setStudentBusyLabel(''); });
+      if(!useStudent || !useStudent.id){
+        setCurrentSessionId(null);
+        setCurrentTest(null);
+        setStudentBusyLabel('');
+        setMessage('参加情報が不足しています');
+        return;
+      }
+
+      let createdSessionId = null;
+      try{
+        const resp = await fetch('/api/exam-sessions', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ student_id: useStudent.id, test_id: t.id }) });
+        const js = await resp.json().catch(function(){ return {}; });
+        if(!resp.ok || !js || !js.id){
+          setCurrentSessionId(null);
+          setCurrentTest(null);
+          setStudentBusyLabel('');
+          setMessage(js && js.error ? js.error : 'セッション作成エラー');
+          return;
+        }
+        createdSessionId = js.id;
+        setCurrentSessionId(createdSessionId);
+        const qres = await fetch('/api/exam-sessions/' + encodeURIComponent(createdSessionId) + '/questions');
+        const qs = await qres.json().catch(function(){ return []; });
+        if(!qres.ok){
+          setCurrentSessionId(null);
+          setCurrentTest(null);
+          setStudentBusyLabel('');
+          setMessage(qs && qs.error ? qs.error : '問題取得エラー');
+          return;
+        }
+        setCurrentQuestions(qs || []);
+        setCurrentSelection([]);
+      }catch(e){
+        setCurrentSessionId(null);
+        setCurrentTest(null);
+        setMessage('セッション作成エラー');
+      }finally{
+        setStudentBusyLabel('');
+      }
     }
 
     function selectChoice(q, choiceId, checked){
@@ -1106,6 +1160,61 @@
       }
     }
 
+    async function finalizeCurrentTest(){
+      setStudentBusyLabel('結果をまとめています');
+      try{
+        if(!currentSessionId){
+          throw new Error('session_id required');
+        }
+        const finishRes = await fetch('/api/exam-sessions/'+currentSessionId+'/finish', { method: 'PUT' });
+        const finishJson = await finishRes.json().catch(function(){ return {}; });
+        if(!finishRes.ok){
+          throw new Error(finishJson && finishJson.error ? finishJson.error : 'finish_failed');
+        }
+        let summaryUrl = '/api/tests/'+currentTest.id+'/summary?student_id='+student.id;
+        if(currentSessionId) summaryUrl += '&session_id=' + encodeURIComponent(currentSessionId);
+        const res = await fetch(summaryUrl);
+        const j = await res.json().catch(function(){ return {}; });
+        if(!res.ok){
+          throw new Error(j && j.error ? j.error : 'summary_fetch_failed');
+        }
+        if(j && j.details){
+          const qres = await fetch('/api/exam-sessions/' + encodeURIComponent(currentSessionId) + '/questions');
+          const questions = await qres.json().catch(()=>[]);
+          const details = j.details.map(d => {
+            const summaryQuestion = (questions || []).find(x => x.id === d.question_id) || { choices: [] };
+            const choiceMap = {};
+            (summaryQuestion.choices || []).forEach(c => { choiceMap[c.id] = c.text; });
+            const given_texts = (d.given_choice_ids || []).map(id => choiceMap[id] || String(id)).filter(Boolean);
+            const correct_texts = (d.correct_choice_ids || []).map(id => choiceMap[id] || String(id)).filter(Boolean);
+            return {
+              questionId: d.question_id,
+              text: d.text,
+              points: d.points,
+              correct: !!d.correct,
+              given_choice_ids: d.given_choice_ids || [],
+              given_texts: given_texts,
+              correct_choice_ids: d.correct_choice_ids || [],
+              correct_texts: correct_texts,
+              explanation: d.explanation || ''
+            };
+          });
+          setResultsSummary(details);
+          setSummaryMeta({ testName: currentTest ? currentTest.name : '', total: j.total_points || 0, earned: j.earned_points || 0 });
+        } else {
+          setResultsSummary([]);
+          setSummaryMeta({ testName: currentTest ? currentTest.name : '', total: 0, earned: 0 });
+        }
+        setMessage('試験終了 - 詳細スコアを表示');
+        setCurrentTest(null);
+        setCurrentSessionId(null);
+      }catch(e){
+        setMessage('採点結果の取得に失敗しました');
+      }finally{
+        setStudentBusyLabel('');
+      }
+    }
+
     function submitCurrentAnswer(){
       const q = currentQuestions[currentIndex];
       if(!q) return;
@@ -1118,6 +1227,20 @@
           setMessage(j.error);
           return;
         }
+        if(isImmediateFeedbackMode(currentTest) && j && j.feedback){
+          setLastResult({
+            questionId: j.feedback.question_id || q.id,
+            text: j.feedback.question_text || q.text,
+            points: q.points || 1,
+            correct: !!j.feedback.correct,
+            given_choice_ids: j.feedback.given_choice_ids || [],
+            given_texts: j.feedback.given_texts || [],
+            correct_choice_ids: j.feedback.correct_choice_ids || [],
+            correct_texts: j.feedback.correct_texts || [],
+            explanation: j.feedback.explanation || ''
+          });
+          return;
+        }
         nextQuestion();
       }).catch(()=> setMessage('送信エラー')).finally(function(){ setStudentBusyLabel(''); });
     }
@@ -1125,57 +1248,11 @@
     function nextQuestion(){
       setCurrentSelection([]);
       setLastResult(null);
-      if(currentIndex+1 < currentQuestions.length){ setCurrentIndex(currentIndex+1); }
-      else {
-        // finished: fetch summary for this student and test
-        setStudentBusyLabel('結果をまとめています');
-        (async ()=>{
-            try{
-              // finish session (compute & persist) if exists
-              if(currentSessionId){
-                try{ await fetch('/api/exam-sessions/'+currentSessionId+'/finish', { method: 'PUT' }); }
-                catch(e){ /* continue even if finish fails */ }
-              }
-              // request summary (prefer session-scoped summary when available)
-              let summaryUrl = '/api/tests/'+currentTest.id+'/summary?student_id='+student.id;
-              if(currentSessionId) summaryUrl += '&session_id=' + encodeURIComponent(currentSessionId);
-              const res = await fetch(summaryUrl);
-              const j = await res.json();
-              if(j && j.details){
-              // fetch questions + choices to map choice ids -> texts
-              const qres = await fetch('/api/tests/'+currentTest.id+'/questions');
-              const questions = await qres.json().catch(()=>[]);
-              const details = j.details.map(d => {
-                const q = (questions || []).find(x => x.id === d.question_id) || { choices: [] };
-                const choiceMap = {};
-                (q.choices || []).forEach(c => { choiceMap[c.id] = c.text; });
-                const given_texts = (d.given_choice_ids || []).map(id => choiceMap[id] || String(id)).filter(Boolean);
-                const correct_texts = (d.correct_choice_ids || []).map(id => choiceMap[id] || String(id)).filter(Boolean);
-                return {
-                  questionId: d.question_id,
-                  text: d.text,
-                  points: d.points,
-                  correct: !!d.correct,
-                  given_choice_ids: d.given_choice_ids || [],
-                  given_texts: given_texts,
-                  correct_choice_ids: d.correct_choice_ids || [],
-                  correct_texts: correct_texts,
-                  explanation: d.explanation || ''
-                };
-              });
-              setResultsSummary(details);
-              setSummaryMeta({ testName: currentTest ? currentTest.name : '', total: j.total_points || 0, earned: j.earned_points || 0 });
-            } else {
-              setResultsSummary([]);
-              setSummaryMeta({ testName: currentTest ? currentTest.name : '', total: 0, earned: 0 });
-            }
-              setMessage('試験終了 - 詳細スコアを表示');
-              setCurrentTest(null);
-              setCurrentSessionId(null);
-          }catch(e){ setMessage('サマリ取得エラー'); setCurrentTest(null); }
-          finally{ setStudentBusyLabel(''); }
-        })();
+      if(currentIndex+1 < currentQuestions.length){
+        setCurrentIndex(currentIndex+1);
+        return;
       }
+      finalizeCurrentTest();
     }
 
     function goToStudentStart(){
@@ -1253,13 +1330,14 @@
           return e('article', { key: t.id, className: cx('student-test-card', !hasStudentName && 'is-disabled') },
             e('div', { className: 'student-test-card__top' },
               e('span', { className: 'student-pill' }, questionCount != null ? (questionCount + '問') : '問題確認中'),
+              e('span', { className: 'student-pill student-pill-muted' }, getAnswerModeLabel(t)),
               t.randomize ? e('span', { className: 'student-pill student-pill-muted' }, 'ランダム出題') : null,
               t.public ? e('span', { className: 'student-pill student-pill-soft' }, '公開中') : null
             ),
             e('h3', null, t.name),
-            e('p', { className: 'student-test-card__meta' }, classLabel + ' / 答えた直後に解説とふりかえり'),
+            e('p', { className: 'student-test-card__meta' }, classLabel + ' / ' + getAnswerModeDescription(t)),
             e('div', { className: cx('student-test-card__footer', sharedStudentAccess && 'student-test-card__footer-centered') },
-              e('span', { className: 'student-test-card__helper' }, hasStudentName ? '最後に学習のふりかえりまで確認できます。' : '表示名を入力すると始められます。'),
+              e('span', { className: 'student-test-card__helper' }, hasStudentName ? (isImmediateFeedbackMode(t) ? '各問の正解と解説を確認しながら進められます。' : '最後に学習のふりかえりまで確認できます。') : '表示名を入力すると始められます。'),
               e('button', { onClick: function(){ handler(t); }, className: 'btn btn-primary', type: 'button', disabled: !hasStudentName || !!studentBusyLabel }, studentBusyLabel ? '準備中...' : buttonText)
             )
           );
@@ -1447,7 +1525,8 @@
       const q = currentQuestions[currentIndex];
       if(!q) return e('div', { className: 'task-empty' }, '問題がありません');
 
-      const answeredCount = currentIndex;
+      const showingFeedback = !!lastResult && isImmediateFeedbackMode(currentTest);
+      const answeredCount = currentIndex + (showingFeedback ? 1 : 0);
       const progressPercent = currentQuestions.length ? Math.round(answeredCount / currentQuestions.length * 100) : 0;
 
       return e('div', { className: 'student-exam-shell' },
@@ -1472,24 +1551,51 @@
               e('span', null, '残り ' + Math.max(currentQuestions.length - answeredCount, 0) + ' 問')
             )
           ),
-          e('article', { className: 'student-question-card' },
-            e('div', { className: 'student-question-card__header' },
-                e('span', { className: 'student-question-card__type-label' }, q && q.type === 'multiple' ? '複数選択' : '１つ選択')
+          showingFeedback
+            ? e('article', { className: cx('student-feedback-card', lastResult.correct ? 'is-correct' : 'is-incorrect') },
+                e('div', { className: 'student-feedback-card__header' },
+                  e('div', null,
+                    e('span', { className: 'student-question-card__type-label' }, '回答結果'),
+                    e('h3', null, lastResult.text || q.text)
+                  ),
+                  e('span', { className: cx('student-status-pill', lastResult.correct ? 'is-correct' : 'is-incorrect') }, lastResult.correct ? '正解' : '不正解')
+                ),
+                e('div', { className: 'student-feedback-card__body' },
+                  e('div', { className: 'student-summary-row' },
+                    e('span', { className: 'student-summary-row__label' }, 'あなたの回答'),
+                    e('strong', null, formatAnswerTexts(lastResult.given_texts, '未回答'))
+                  ),
+                  e('div', { className: 'student-summary-row' },
+                    e('span', { className: 'student-summary-row__label' }, '正答'),
+                    e('strong', null, formatAnswerTexts(lastResult.correct_texts, '設定なし'))
+                  ),
+                  lastResult.explanation ? e('div', { className: 'student-summary-row student-summary-row-note' },
+                    e('span', { className: 'student-summary-row__label' }, '解説'),
+                    e('span', null, lastResult.explanation)
+                  ) : null
+                )
+              )
+            : e('article', { className: 'student-question-card' },
+                e('div', { className: 'student-question-card__header' },
+                    e('span', { className: 'student-question-card__type-label' }, q && q.type === 'multiple' ? '複数選択' : '１つ選択')
+                  ),
+                e('h3', null, q.text),
+                e('p', { className: 'student-question-card__hint' }, ''),
+                e('div', { className: 'student-choice-list' }, (q.choices || []).map(function(c){
+                  const selected = currentSelection.includes(c.id);
+                  const inputType = q.type === 'multiple' ? 'checkbox' : 'radio';
+                  return e('label', { key: c.id, className: cx('student-choice-option', selected && 'is-selected') },
+                    e('input', { type: inputType, name: 'q' + q.id, checked: selected, disabled: !!studentBusyLabel, onChange: function(ev){ selectChoice(q, c.id, q.type === 'multiple' ? ev.target.checked : true); } }),
+                    e('span', { className: 'student-choice-option__marker' }),
+                    e('span', { className: 'student-choice-option__text' }, c.text)
+                  );
+                }))
               ),
-            e('h3', null, q.text),
-            e('p', { className: 'student-question-card__hint' }, ''),
-            e('div', { className: 'student-choice-list' }, (q.choices || []).map(function(c){
-              const selected = currentSelection.includes(c.id);
-              const inputType = q.type === 'multiple' ? 'checkbox' : 'radio';
-              return e('label', { key: c.id, className: cx('student-choice-option', selected && 'is-selected') },
-                e('input', { type: inputType, name: 'q' + q.id, checked: selected, disabled: !!studentBusyLabel, onChange: function(ev){ selectChoice(q, c.id, q.type === 'multiple' ? ev.target.checked : true); } }),
-                e('span', { className: 'student-choice-option__marker' }),
-                e('span', { className: 'student-choice-option__text' }, c.text)
-              );
-            }))
-          ),
           e('div', { className: 'student-exam-actions' },
-            e('button', { onClick: submitCurrentAnswer, className: 'btn btn-primary', type: 'button', disabled: !currentSelection.length || !!studentBusyLabel }, studentBusyLabel ? '送信中...' : '回答を送信')
+            showingFeedback
+              ? e('button', { onClick: nextQuestion, className: 'btn btn-primary', type: 'button', disabled: !!studentBusyLabel }, currentIndex + 1 < currentQuestions.length ? '次の問題へ' : '振り返りを見る')
+              : e('button', { onClick: submitCurrentAnswer, className: 'btn btn-primary', type: 'button', disabled: !currentSelection.length || !!studentBusyLabel }, studentBusyLabel ? '送信中...' : '回答を送信'),
+            showingFeedback ? e('span', { className: 'student-action-hint' }, '得点は最後の振り返りページで表示します。') : null
           )
         )
       );

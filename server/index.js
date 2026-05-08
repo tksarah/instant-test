@@ -180,6 +180,7 @@ async function deleteTeacherCascade(teacherId){
   try{
     await dbRunAsync('DELETE FROM teacher_sessions WHERE teacher_id=?', [id]);
     await dbRunAsync('DELETE FROM student_answers WHERE test_id IN (SELECT id FROM tests WHERE teacher_id=?) OR student_id IN (SELECT id FROM students WHERE class_id IN (SELECT id FROM classes WHERE teacher_id=?))', [id, id]);
+    await dbRunAsync('DELETE FROM exam_session_questions WHERE session_id IN (SELECT id FROM exam_sessions WHERE test_id IN (SELECT id FROM tests WHERE teacher_id=?) OR student_id IN (SELECT id FROM students WHERE class_id IN (SELECT id FROM classes WHERE teacher_id=?)))', [id, id]);
     await dbRunAsync('DELETE FROM exam_sessions WHERE test_id IN (SELECT id FROM tests WHERE teacher_id=?) OR student_id IN (SELECT id FROM students WHERE class_id IN (SELECT id FROM classes WHERE teacher_id=?))', [id, id]);
     await dbRunAsync('DELETE FROM choices WHERE question_id IN (SELECT id FROM questions WHERE test_id IN (SELECT id FROM tests WHERE teacher_id=?))', [id]);
     await dbRunAsync('DELETE FROM questions WHERE test_id IN (SELECT id FROM tests WHERE teacher_id=?)', [id]);
@@ -301,6 +302,208 @@ function ensureTeacherOwnsExamSession(req, res, sessionId, cb){
   );
 }
 
+function normalizeAnswerMode(value){
+  return value === 'immediate_feedback' ? 'immediate_feedback' : 'deferred_summary';
+}
+
+function shuffleArrayInPlace(arr){
+  for(let i = arr.length - 1; i > 0; i--){
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+  }
+}
+
+function parseChoiceOrderJson(raw){
+  if(!raw) return [];
+  try{
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(id => parseInt(id, 10)).filter(Boolean) : [];
+  }catch(_err){
+    return [];
+  }
+}
+
+async function getQuestionBankForTest(testId){
+  const questions = await dbAllAsync('SELECT * FROM questions WHERE test_id=?', [testId]);
+  const qids = (questions || []).map(q => q.id);
+  if(!qids.length){
+    return { questions: [], choicesMap: {} };
+  }
+  const choices = await dbAllAsync(`SELECT * FROM choices WHERE question_id IN (${qids.join(',')})`, []);
+  const choicesMap = {};
+  (choices || []).forEach(choice => {
+    choicesMap[choice.question_id] = choicesMap[choice.question_id] || [];
+    choicesMap[choice.question_id].push(choice);
+  });
+  return { questions: questions || [], choicesMap };
+}
+
+function sortChoicesByStoredOrder(choiceRows, choiceOrderJson){
+  const orderedIds = parseChoiceOrderJson(choiceOrderJson);
+  if(!orderedIds.length) return (choiceRows || []).slice();
+  const byId = new Map((choiceRows || []).map(choice => [choice.id, choice]));
+  const ordered = [];
+  orderedIds.forEach(id => {
+    const choice = byId.get(id);
+    if(choice){
+      ordered.push(choice);
+      byId.delete(id);
+    }
+  });
+  return ordered.concat(Array.from(byId.values()));
+}
+
+function buildStudentQuestionPayload(question, choiceRows){
+  return {
+    id: question.id,
+    test_id: question.test_id,
+    type: question.type,
+    text: question.text,
+    points: question.points,
+    choices: (choiceRows || []).map(choice => ({
+      id: choice.id,
+      question_id: choice.question_id,
+      text: choice.text
+    }))
+  };
+}
+
+function createSessionQuestionPlanRows(questionRows, choicesMap, shouldRandomize){
+  const planned = (questionRows || []).map(question => ({
+    question,
+    choices: ((choicesMap && choicesMap[question.id]) || []).slice()
+  }));
+
+  if(shouldRandomize){
+    planned.forEach(item => {
+      if(item.choices.length > 1) shuffleArrayInPlace(item.choices);
+    });
+    shuffleArrayInPlace(planned);
+  }
+
+  return planned.map((item, index) => ({
+    question_id: item.question.id,
+    position: index + 1,
+    choice_order_json: JSON.stringify(item.choices.map(choice => choice.id))
+  }));
+}
+
+async function storeExamSessionQuestionPlan(sessionId, testId, shouldRandomize){
+  const bank = await getQuestionBankForTest(testId);
+  const planRows = createSessionQuestionPlanRows(bank.questions, bank.choicesMap, shouldRandomize);
+  await dbRunAsync('DELETE FROM exam_session_questions WHERE session_id=?', [sessionId]);
+  for(const row of planRows){
+    await dbRunAsync(
+      'INSERT INTO exam_session_questions (session_id, question_id, position, choice_order_json) VALUES (?,?,?,?)',
+      [sessionId, row.question_id, row.position, row.choice_order_json]
+    );
+  }
+  return planRows;
+}
+
+async function ensureExamSessionQuestionPlan(session){
+  const existingRows = await dbAllAsync('SELECT * FROM exam_session_questions WHERE session_id=? ORDER BY position ASC', [session.id]);
+  if(existingRows.length){
+    return existingRows;
+  }
+  await storeExamSessionQuestionPlan(session.id, session.test_id, session.randomize === 1);
+  return dbAllAsync('SELECT * FROM exam_session_questions WHERE session_id=? ORDER BY position ASC', [session.id]);
+}
+
+async function buildQuestionsResponse(testId, options){
+  const teacherView = !!(options && options.teacherView);
+  const sessionPlanRows = options && Array.isArray(options.sessionPlanRows) ? options.sessionPlanRows : null;
+  const shouldRandomize = !!(options && options.shouldRandomize);
+  const bank = await getQuestionBankForTest(testId);
+  const questions = bank.questions || [];
+  const choicesMap = bank.choicesMap || {};
+
+  if(!questions.length){
+    return [];
+  }
+
+  if(sessionPlanRows && sessionPlanRows.length){
+    const questionMap = new Map(questions.map(question => [question.id, question]));
+    return sessionPlanRows.map(planRow => {
+      const question = questionMap.get(planRow.question_id);
+      if(!question) return null;
+      const plannedChoices = sortChoicesByStoredOrder(choicesMap[question.id] || [], planRow.choice_order_json);
+      if(teacherView){
+        return { ...question, choices: plannedChoices };
+      }
+      return buildStudentQuestionPayload(question, plannedChoices);
+    }).filter(Boolean);
+  }
+
+  const orderedQuestions = questions.slice();
+  const orderedChoicesMap = {};
+  Object.keys(choicesMap).forEach(questionId => {
+    orderedChoicesMap[questionId] = (choicesMap[questionId] || []).slice();
+  });
+
+  if(shouldRandomize){
+    Object.keys(orderedChoicesMap).forEach(questionId => {
+      if(orderedChoicesMap[questionId].length > 1){
+        shuffleArrayInPlace(orderedChoicesMap[questionId]);
+      }
+    });
+    shuffleArrayInPlace(orderedQuestions);
+  }
+
+  return orderedQuestions.map(question => {
+    const questionChoices = orderedChoicesMap[question.id] || [];
+    if(teacherView){
+      return { ...question, choices: questionChoices };
+    }
+    return buildStudentQuestionPayload(question, questionChoices);
+  });
+}
+
+function authorizeExamSessionAccess(req, res, sessionId, cb){
+  (async () => {
+    try{
+      const session = await dbGetAsync(
+        `SELECT es.*, t.teacher_id, t.class_id, t.public, t.randomize, t.answer_mode
+         FROM exam_sessions es
+         JOIN tests t ON t.id=es.test_id
+         WHERE es.id=?`,
+        [sessionId]
+      );
+      if(!session) return res.status(404).json({ error: 'session_not_found' });
+
+      if(req.teacher){
+        if(session.teacher_id !== req.teacher.id) return res.status(404).json({ error: 'not_found' });
+        return cb(session, { actor: 'teacher' });
+      }
+
+      if(!req.student) return res.status(401).json({ error: 'unauthorized' });
+      if(req.student.id !== session.student_id) return res.status(403).json({ error: 'forbidden' });
+      if(Number(req.student.class_id) !== Number(session.class_id)) return res.status(403).json({ error: 'forbidden' });
+      return cb(session, { actor: 'student' });
+    }catch(err){
+      return res.status(500).json({ error: err.message });
+    }
+  })();
+}
+
+function buildAnswerFeedback(questionRow, choiceRows, submittedChoiceIds, correct){
+  const choiceTextMap = {};
+  (choiceRows || []).forEach(row => { choiceTextMap[row.id] = row.text; });
+  const correctIds = (choiceRows || []).filter(row => row.is_correct === 1 || row.is_correct === true).map(row => row.id);
+  return {
+    question_id: questionRow.id,
+    question_text: questionRow.text,
+    correct: correct,
+    explanation: String(questionRow.explanation || '').trim(),
+    given_choice_ids: submittedChoiceIds,
+    correct_choice_ids: correctIds,
+    given_texts: submittedChoiceIds.map(cid => choiceTextMap[cid]).filter(Boolean),
+    correct_texts: correctIds.map(cid => choiceTextMap[cid]).filter(Boolean)
+  };
+}
+
 function buildTestSummaryForStudent(testId, studentId, sessionId){
   return new Promise((resolve, reject) => {
     db.all('SELECT * FROM questions WHERE test_id=?', [testId], (err, questions) => {
@@ -383,12 +586,12 @@ function authorizeStudentTestAccess(req, res, testId, studentId, cb){
   (async () => {
     try{
       if(req.teacher){
-        const ownedTest = await dbGetAsync('SELECT id, class_id, public, teacher_id FROM tests WHERE id=? AND teacher_id=?', [requestedTestId, req.teacher.id]);
+        const ownedTest = await dbGetAsync('SELECT id, class_id, public, teacher_id, randomize, answer_mode FROM tests WHERE id=? AND teacher_id=?', [requestedTestId, req.teacher.id]);
         if(!ownedTest) return res.status(404).json({ error: 'not_found' });
         return cb({ studentId: requestedStudentId, test: ownedTest, actor: 'teacher' });
       }
 
-      const test = await dbGetAsync('SELECT id, class_id, public FROM tests WHERE id=? AND public=1', [requestedTestId]);
+      const test = await dbGetAsync('SELECT id, class_id, public, randomize, answer_mode FROM tests WHERE id=? AND public=1', [requestedTestId]);
       if(!test) return res.status(404).json({ error: 'not_found' });
       if(!req.student) return res.status(401).json({ error: 'unauthorized' });
       if(req.student.id !== requestedStudentId) return res.status(403).json({ error: 'forbidden' });
@@ -408,19 +611,19 @@ function authorizeSummaryAccess(req, res, testId, studentId, sessionId, cb){
   authorizeStudentTestAccess(req, res, testId, studentId, ({ studentId: authorizedStudentId, actor }) => {
     (async () => {
       try{
+        let resolvedSession = null;
         if(requestedSessionId){
-          const session = await dbGetAsync('SELECT id FROM exam_sessions WHERE id=? AND student_id=? AND test_id=?', [requestedSessionId, authorizedStudentId, testId]);
-          if(!session){
+          resolvedSession = await dbGetAsync('SELECT id, status, finished_at FROM exam_sessions WHERE id=? AND student_id=? AND test_id=?', [requestedSessionId, authorizedStudentId, testId]);
+          if(!resolvedSession){
             return res.status(actor === 'teacher' ? 404 : 403).json({ error: actor === 'teacher' ? 'not_found' : 'forbidden' });
           }
         }
 
         if(actor !== 'teacher'){
-          const participation = await dbGetAsync(
-            'SELECT 1 AS ok FROM exam_sessions WHERE student_id=? AND test_id=? UNION SELECT 1 AS ok FROM student_answers WHERE student_id=? AND test_id=? LIMIT 1',
-            [authorizedStudentId, testId, authorizedStudentId, testId]
-          );
-          if(!participation) return res.status(403).json({ error: 'forbidden' });
+          if(!requestedSessionId) return res.status(400).json({ error: 'session_id required' });
+          if(!resolvedSession || (resolvedSession.status !== 'completed' && !resolvedSession.finished_at)){
+            return res.status(403).json({ error: 'summary_not_ready' });
+          }
         }
 
         return cb({ studentId: authorizedStudentId, sessionId: requestedSessionId });
@@ -643,19 +846,22 @@ app.delete('/api/classes/:id', requireTeacher, (req, res) => {
           // cascade delete related data for this teacher's tests
           db.run('DELETE FROM student_answers WHERE test_id IN (SELECT id FROM tests WHERE class_id=? AND teacher_id=?)', [id, req.teacher.id], function(err2){
             if(err2) return res.status(500).json({ error: err2.message });
-            db.run('DELETE FROM exam_sessions WHERE test_id IN (SELECT id FROM tests WHERE class_id=? AND teacher_id=?)', [id, req.teacher.id], function(err3){
-              if(err3) return res.status(500).json({ error: err3.message });
-              db.run('DELETE FROM choices WHERE question_id IN (SELECT id FROM questions WHERE test_id IN (SELECT id FROM tests WHERE class_id=? AND teacher_id=?))', [id, req.teacher.id], function(err4){
-                if(err4) return res.status(500).json({ error: err4.message });
-                db.run('DELETE FROM questions WHERE test_id IN (SELECT id FROM tests WHERE class_id=? AND teacher_id=?)', [id, req.teacher.id], function(err5){
-                  if(err5) return res.status(500).json({ error: err5.message });
-                  db.run('DELETE FROM tests WHERE class_id=? AND teacher_id=?', [id, req.teacher.id], function(err6){
-                    if(err6) return res.status(500).json({ error: err6.message });
-                    db.run('DELETE FROM students WHERE class_id=?', [id], function(err7){
-                      if(err7) return res.status(500).json({ error: err7.message });
-                      db.run('DELETE FROM classes WHERE id=? AND teacher_id=?', [id, req.teacher.id], function(err8){
-                        if(err8) return res.status(500).json({ error: err8.message });
-                        res.json({ id: id, deleted: true, cascade: true });
+            db.run('DELETE FROM exam_session_questions WHERE session_id IN (SELECT id FROM exam_sessions WHERE test_id IN (SELECT id FROM tests WHERE class_id=? AND teacher_id=?))', [id, req.teacher.id], function(planErr){
+              if(planErr) return res.status(500).json({ error: planErr.message });
+              db.run('DELETE FROM exam_sessions WHERE test_id IN (SELECT id FROM tests WHERE class_id=? AND teacher_id=?)', [id, req.teacher.id], function(err3){
+                if(err3) return res.status(500).json({ error: err3.message });
+                db.run('DELETE FROM choices WHERE question_id IN (SELECT id FROM questions WHERE test_id IN (SELECT id FROM tests WHERE class_id=? AND teacher_id=?))', [id, req.teacher.id], function(err4){
+                  if(err4) return res.status(500).json({ error: err4.message });
+                  db.run('DELETE FROM questions WHERE test_id IN (SELECT id FROM tests WHERE class_id=? AND teacher_id=?)', [id, req.teacher.id], function(err5){
+                    if(err5) return res.status(500).json({ error: err5.message });
+                    db.run('DELETE FROM tests WHERE class_id=? AND teacher_id=?', [id, req.teacher.id], function(err6){
+                      if(err6) return res.status(500).json({ error: err6.message });
+                      db.run('DELETE FROM students WHERE class_id=?', [id], function(err7){
+                        if(err7) return res.status(500).json({ error: err7.message });
+                        db.run('DELETE FROM classes WHERE id=? AND teacher_id=?', [id, req.teacher.id], function(err8){
+                          if(err8) return res.status(500).json({ error: err8.message });
+                          res.json({ id: Number(id), deleted: true, cascade: true });
+                        });
                       });
                     });
                   });
@@ -679,14 +885,15 @@ app.delete('/api/classes/:id', requireTeacher, (req, res) => {
 
 // Tests
 app.post('/api/tests', requireTeacher, (req, res) => {
-  const { class_id, name, description, public: pub, randomize } = req.body;
+  const { class_id, name, description, public: pub, randomize, answer_mode } = req.body;
+  const answerMode = normalizeAnswerMode(answer_mode);
   const proceed = () => {
     db.run(
-      'INSERT INTO tests (teacher_id, class_id, name, description, public, randomize) VALUES (?,?,?,?,?,?)',
-      [req.teacher.id, class_id||null, name, description||'', pub?1:0, randomize?1:0],
+      'INSERT INTO tests (teacher_id, class_id, name, description, public, randomize, answer_mode) VALUES (?,?,?,?,?,?,?)',
+      [req.teacher.id, class_id||null, name, description||'', pub?1:0, randomize?1:0, answerMode],
       function(err){
         if(err) return res.status(500).json({ error: err.message });
-        res.json({ id: this.lastID });
+        res.json({ id: this.lastID, answer_mode: answerMode });
       }
     );
   };
@@ -724,19 +931,23 @@ app.get('/api/tests', (req, res) => {
   sql += ' ORDER BY id DESC';
   db.all(sql, params, (err, rows) => {
     if(err) return res.status(500).json({ error: err.message });
-    res.json(rows || []);
+    res.json((rows || []).map(row => ({ ...row, answer_mode: normalizeAnswerMode(row.answer_mode) })));
   });
 });
 
-// Update a test (name, description, public, randomize, archived)
+// Update a test (name, description, public, randomize, answer_mode, archived)
 app.put('/api/tests/:id', requireTeacher, (req, res) => {
   const id = req.params.id;
-  const { name, description, public: pub, randomize, class_id, archived } = req.body;
+  const { name, description, public: pub, randomize, answer_mode, class_id, archived } = req.body;
   // Build update dynamically so that if `class_id` is undefined we don't overwrite it
   const fields = ['name=?', 'description=?', 'public=?', 'randomize=?'];
   const vals = [name, description||'', pub?1:0, randomize?1:0];
   ensureTeacherOwnsTest(req, res, id, () => {
     const proceed = () => {
+      if(typeof answer_mode !== 'undefined'){
+        fields.push('answer_mode=?');
+        vals.push(normalizeAnswerMode(answer_mode));
+      }
       if(typeof class_id !== 'undefined'){
         fields.push('class_id=?');
         vals.push(class_id);
@@ -751,7 +962,7 @@ app.put('/api/tests/:id', requireTeacher, (req, res) => {
         if(err) return res.status(500).json({ error: err.message });
         db.get('SELECT * FROM tests WHERE id=? AND teacher_id=?', [id, req.teacher.id], (e, row) => {
           if(e) return res.status(500).json({ error: e.message });
-          res.json(row);
+          res.json({ ...row, answer_mode: normalizeAnswerMode(row && row.answer_mode) });
         });
       });
     };
@@ -779,15 +990,18 @@ app.delete('/api/tests/:id', requireTeacher, (req, res) => {
           // cascade delete related data
           db.run('DELETE FROM student_answers WHERE test_id=?', [id], function(err2){
             if(err2) return res.status(500).json({ error: err2.message });
-            db.run('DELETE FROM exam_sessions WHERE test_id=?', [id], function(err3){
-              if(err3) return res.status(500).json({ error: err3.message });
-              db.run('DELETE FROM choices WHERE question_id IN (SELECT id FROM questions WHERE test_id=?)', [id], function(err4){
-                if(err4) return res.status(500).json({ error: err4.message });
-                db.run('DELETE FROM questions WHERE test_id=?', [id], function(err5){
-                  if(err5) return res.status(500).json({ error: err5.message });
-                  db.run('DELETE FROM tests WHERE id=? AND teacher_id=?', [id, req.teacher.id], function(err6){
-                    if(err6) return res.status(500).json({ error: err6.message });
-                    res.json({ id: id, deleted: true, cascade: true });
+            db.run('DELETE FROM exam_session_questions WHERE session_id IN (SELECT id FROM exam_sessions WHERE test_id=?)', [id], function(planErr){
+              if(planErr) return res.status(500).json({ error: planErr.message });
+              db.run('DELETE FROM exam_sessions WHERE test_id=?', [id], function(err3){
+                if(err3) return res.status(500).json({ error: err3.message });
+                db.run('DELETE FROM choices WHERE question_id IN (SELECT id FROM questions WHERE test_id=?)', [id], function(err4){
+                  if(err4) return res.status(500).json({ error: err4.message });
+                  db.run('DELETE FROM questions WHERE test_id=?', [id], function(err5){
+                    if(err5) return res.status(500).json({ error: err5.message });
+                    db.run('DELETE FROM tests WHERE id=? AND teacher_id=?', [id, req.teacher.id], function(err6){
+                      if(err6) return res.status(500).json({ error: err6.message });
+                      res.json({ id: id, deleted: true, cascade: true });
+                    });
                   });
                 });
               });
@@ -833,48 +1047,26 @@ app.get('/api/tests/:testId/questions', (req, res) => {
   loadTest((errt, testRow) => {
     if(errt) return res.status(500).json({ error: errt.message });
     if(!testRow) return res.status(404).json({ error: 'not_found' });
-    const shouldRandomize = testRow && testRow.randomize === 1;
-    db.all('SELECT * FROM questions WHERE test_id=?', [testId], (err, questions) => {
-      if(err) return res.status(500).json({ error: err.message });
-      const qids = questions.map(q => q.id);
-      if(qids.length === 0) return res.json([]);
-      db.all(`SELECT * FROM choices WHERE question_id IN (${qids.join(',')})`, (err2, choices) => {
-        if(err2) return res.status(500).json({ error: err2.message });
-        const map = {};
-        choices.forEach(c => { map[c.question_id] = map[c.question_id] || []; map[c.question_id].push(c); });
-        // attach choices, but only expose correctness to authenticated teachers
-        let out = questions.map(q => {
-          const questionChoices = (map[q.id] || []).slice();
-          if(req.teacher){
-            return { ...q, choices: questionChoices };
-          }
-          return {
-            id: q.id,
-            test_id: q.test_id,
-            type: q.type,
-            text: q.text,
-            points: q.points,
-            choices: questionChoices.map(choice => ({
-              id: choice.id,
-              question_id: choice.question_id,
-              text: choice.text
-            }))
-          };
-        });
-        // if randomize flagged on test, shuffle questions and choices
-        if(shouldRandomize){
-          const shuffle = arr => {
-            for(let i = arr.length - 1; i > 0; i--){
-              const j = Math.floor(Math.random() * (i + 1));
-              const tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
-            }
-          };
-          out.forEach(q => { if(q.choices && q.choices.length > 1) shuffle(q.choices); });
-          shuffle(out);
-        }
-        res.json(out);
-      });
-    });
+    buildQuestionsResponse(testId, {
+      teacherView: !!req.teacher,
+      shouldRandomize: testRow && testRow.randomize === 1
+    })
+      .then(out => res.json(out))
+      .catch(err => res.status(500).json({ error: err.message }));
+  });
+});
+
+app.get('/api/exam-sessions/:id/questions', (req, res) => {
+  const id = req.params.id;
+  authorizeExamSessionAccess(req, res, id, (session, { actor }) => {
+    ensureExamSessionQuestionPlan(session)
+      .then(planRows => buildQuestionsResponse(session.test_id, {
+        teacherView: actor === 'teacher',
+        sessionPlanRows: planRows,
+        shouldRandomize: false
+      }))
+      .then(questions => res.json(questions))
+      .catch(err => res.status(500).json({ error: err.message }));
   });
 });
 
@@ -976,52 +1168,117 @@ app.post('/api/students', (req, res) => {
 app.post('/api/submit-answer', (req, res) => {
   const { student_id, test_id, question_id, choice_id, choice_ids, session_id } = req.body;
   if(!student_id || !test_id || !question_id) return res.status(400).json({ error: 'student_id,test_id,question_id required' });
-  authorizeStudentTestAccess(req, res, test_id, student_id, ({ studentId: authorizedStudentId }) => {
-    const submitted = [];
-    if(Array.isArray(choice_ids)) submitted.push(...choice_ids.map(x=>parseInt(x, 10)).filter(Boolean));
-    else if(choice_id) submitted.push(parseInt(choice_id, 10));
+  authorizeStudentTestAccess(req, res, test_id, student_id, ({ studentId: authorizedStudentId, test }) => {
+    (async () => {
+      const normalizedSessionId = parseInt(session_id, 10);
+      if(!normalizedSessionId) return res.status(400).json({ error: 'session_id required' });
 
-    db.get('SELECT id, test_id FROM questions WHERE id=? AND test_id=?', [question_id, test_id], (questionErr, questionRow) => {
-      if(questionErr) return res.status(500).json({ error: questionErr.message });
-      if(!questionRow) return res.status(400).json({ error: 'invalid_question_id' });
+      const submitted = [];
+      if(Array.isArray(choice_ids)) submitted.push(...choice_ids.map(x => parseInt(x, 10)).filter(Boolean));
+      else if(choice_id) submitted.push(parseInt(choice_id, 10));
+      const uniqueSubmitted = Array.from(new Set(submitted));
+      const answerMode = normalizeAnswerMode(test && test.answer_mode);
 
-      const continueWithAnswerInsert = () => {
-        db.all('SELECT id FROM choices WHERE question_id=? AND is_correct=1', [question_id], (err, correctRows)=>{
-          if(err) return res.status(500).json({ error: err.message });
-          const correctIds = correctRows.map(r=>r.id);
-          let correct = false;
-          if(submitted.length > 0){
-            const s1 = new Set(submitted);
-            const s2 = new Set(correctIds);
-            if(s1.size === s2.size){
-              correct = [...s1].every(x => s2.has(x));
-            }
+      try{
+        await dbRunAsync('BEGIN IMMEDIATE TRANSACTION');
+
+        const session = await dbGetAsync(
+          'SELECT id, student_id, test_id, status, finished_at FROM exam_sessions WHERE id=? AND student_id=? AND test_id=?',
+          [normalizedSessionId, authorizedStudentId, test_id]
+        );
+        if(!session){
+          await dbRunAsync('ROLLBACK');
+          return res.status(403).json({ error: 'forbidden' });
+        }
+        if(session.status === 'completed' || session.finished_at){
+          await dbRunAsync('ROLLBACK');
+          return res.status(409).json({ error: 'session_completed' });
+        }
+
+        const questionRow = await dbGetAsync('SELECT id, test_id, text, explanation FROM questions WHERE id=? AND test_id=?', [question_id, test_id]);
+        if(!questionRow){
+          await dbRunAsync('ROLLBACK');
+          return res.status(400).json({ error: 'invalid_question_id' });
+        }
+
+        const planRows = await ensureExamSessionQuestionPlan({ ...session, randomize: test && test.randomize });
+        const nextPlanRow = (planRows || []).find(row => !row.answered_at);
+        if(!nextPlanRow){
+          await dbRunAsync('ROLLBACK');
+          return res.status(409).json({ error: 'session_completed' });
+        }
+        if(Number(nextPlanRow.question_id) !== Number(question_id)){
+          await dbRunAsync('ROLLBACK');
+          return res.status(409).json({ error: 'question_out_of_order', expected_question_id: nextPlanRow.question_id });
+        }
+
+        const existingAnswers = await dbAllAsync(
+          'SELECT choice_id FROM student_answers WHERE session_id=? AND student_id=? AND test_id=? AND question_id=?',
+          [normalizedSessionId, authorizedStudentId, test_id, question_id]
+        );
+        if(existingAnswers.length){
+          await dbRunAsync('ROLLBACK');
+          return res.status(409).json({ error: 'question_already_answered' });
+        }
+
+        const choiceRows = await dbAllAsync('SELECT id, text, is_correct FROM choices WHERE question_id=?', [question_id]);
+        const validChoiceIds = new Set((choiceRows || []).map(row => row.id));
+        const hasInvalidChoice = uniqueSubmitted.some(cid => !validChoiceIds.has(cid));
+        if(hasInvalidChoice){
+          await dbRunAsync('ROLLBACK');
+          return res.status(400).json({ error: 'invalid_choice_id' });
+        }
+
+        const correctIds = (choiceRows || []).filter(row => row.is_correct === 1 || row.is_correct === true).map(row => row.id);
+        let correct = false;
+        if(uniqueSubmitted.length > 0){
+          const submittedSet = new Set(uniqueSubmitted);
+          const correctSet = new Set(correctIds);
+          if(submittedSet.size === correctSet.size){
+            correct = [...submittedSet].every(id => correctSet.has(id));
           }
-          const ops = [];
-          if(submitted.length === 0){
-            ops.push(new Promise((resolve, reject)=>{
-              db.run('INSERT INTO student_answers (student_id, test_id, question_id, choice_id, correct, session_id) VALUES (?,?,?,?,?,?)', [authorizedStudentId, test_id, null, null, correct?1:0, session_id||null], function(e){ if(e) reject(e); else resolve(); });
-            }));
-          } else {
-            submitted.forEach(cid => {
-              ops.push(new Promise((resolve, reject)=>{
-                db.run('INSERT INTO student_answers (student_id, test_id, question_id, choice_id, correct, session_id) VALUES (?,?,?,?,?,?)', [authorizedStudentId, test_id, question_id, cid, correct?1:0, session_id||null], function(e){ if(e) reject(e); else resolve(); });
-              }));
-            });
-          }
-          Promise.all(ops).then(()=>{
-            res.json({ accepted: true });
-          }).catch(e=>res.status(500).json({ error: e.message }));
-        });
-      };
+        }
 
-      if(!session_id) return continueWithAnswerInsert();
-      db.get('SELECT id FROM exam_sessions WHERE id=? AND student_id=? AND test_id=?', [session_id, authorizedStudentId, test_id], (sessionErr, sessionRow) => {
-        if(sessionErr) return res.status(500).json({ error: sessionErr.message });
-        if(!sessionRow) return res.status(403).json({ error: 'forbidden' });
-        continueWithAnswerInsert();
-      });
-    });
+        if(uniqueSubmitted.length === 0){
+          await dbRunAsync(
+            'INSERT INTO student_answers (student_id, test_id, question_id, choice_id, correct, session_id) VALUES (?,?,?,?,?,?)',
+            [authorizedStudentId, test_id, question_id, null, correct ? 1 : 0, normalizedSessionId]
+          );
+        } else {
+          for(const submittedChoiceId of uniqueSubmitted){
+            await dbRunAsync(
+              'INSERT INTO student_answers (student_id, test_id, question_id, choice_id, correct, session_id) VALUES (?,?,?,?,?,?)',
+              [authorizedStudentId, test_id, question_id, submittedChoiceId, correct ? 1 : 0, normalizedSessionId]
+            );
+          }
+        }
+
+        const answeredAt = new Date().toISOString();
+        const markAnswered = await dbRunAsync(
+          'UPDATE exam_session_questions SET answered_at=? WHERE session_id=? AND question_id=? AND answered_at IS NULL',
+          [answeredAt, normalizedSessionId, question_id]
+        );
+        if(!markAnswered.changes){
+          await dbRunAsync('ROLLBACK');
+          return res.status(409).json({ error: 'question_already_answered' });
+        }
+
+        await dbRunAsync('COMMIT');
+
+        const response = { accepted: true };
+        if(answerMode === 'immediate_feedback'){
+          response.feedback = buildAnswerFeedback(questionRow, choiceRows, uniqueSubmitted, correct);
+        }
+        return res.json(response);
+      }catch(err){
+        try{
+          await dbRunAsync('ROLLBACK');
+        }catch(_rollbackErr){
+          // surface the original error
+        }
+        return res.status(500).json({ error: err.message });
+      }
+    })();
   });
 });
 
@@ -1179,12 +1436,27 @@ app.get('/api/exams', requireTeacher, (req, res) => {
 app.post('/api/exam-sessions', (req, res) => {
   const { student_id, test_id } = req.body;
   if(!student_id || !test_id) return res.status(400).json({ error: 'student_id and test_id required' });
-  authorizeStudentTestAccess(req, res, test_id, student_id, ({ studentId: authorizedStudentId }) => {
-    const started_at = new Date().toISOString();
-    db.run('INSERT INTO exam_sessions (student_id, test_id, started_at, status) VALUES (?,?,?,?)', [authorizedStudentId, test_id, started_at, 'in_progress'], function(err){
-      if(err) return res.status(500).json({ error: err.message });
-      res.json({ id: this.lastID, student_id: authorizedStudentId, test_id, started_at, status: 'in_progress' });
-    });
+  authorizeStudentTestAccess(req, res, test_id, student_id, ({ studentId: authorizedStudentId, test }) => {
+    (async () => {
+      const started_at = new Date().toISOString();
+      try{
+        await dbRunAsync('BEGIN IMMEDIATE TRANSACTION');
+        const inserted = await dbRunAsync(
+          'INSERT INTO exam_sessions (student_id, test_id, started_at, status) VALUES (?,?,?,?)',
+          [authorizedStudentId, test_id, started_at, 'in_progress']
+        );
+        await storeExamSessionQuestionPlan(inserted.lastID, test_id, test && test.randomize === 1);
+        await dbRunAsync('COMMIT');
+        return res.json({ id: inserted.lastID, student_id: authorizedStudentId, test_id, started_at, status: 'in_progress' });
+      }catch(err){
+        try{
+          await dbRunAsync('ROLLBACK');
+        }catch(_rollbackErr){
+          // surface the original error
+        }
+        return res.status(500).json({ error: err.message });
+      }
+    })();
   });
 });
 
@@ -1193,9 +1465,12 @@ app.delete('/api/exam-sessions/:id', requireTeacher, (req, res) => {
   ensureTeacherOwnsExamSession(req, res, id, () => {
     db.run('DELETE FROM student_answers WHERE session_id=?', [id], function(err){
       if(err) return res.status(500).json({ error: err.message });
-      db.run('DELETE FROM exam_sessions WHERE id=?', [id], function(deleteErr){
-        if(deleteErr) return res.status(500).json({ error: deleteErr.message });
-        res.json({ id: Number(id), deleted: true });
+      db.run('DELETE FROM exam_session_questions WHERE session_id=?', [id], function(planErr){
+        if(planErr) return res.status(500).json({ error: planErr.message });
+        db.run('DELETE FROM exam_sessions WHERE id=?', [id], function(deleteErr){
+          if(deleteErr) return res.status(500).json({ error: deleteErr.message });
+          res.json({ id: Number(id), deleted: true });
+        });
       });
     });
   });

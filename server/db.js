@@ -48,6 +48,7 @@ db.serialize(() => {
     description TEXT,
     public INTEGER DEFAULT 0,
     randomize INTEGER DEFAULT 0,
+    answer_mode TEXT DEFAULT 'deferred_summary',
     FOREIGN KEY(class_id) REFERENCES classes(id)
   );`);
 
@@ -66,6 +67,22 @@ db.serialize(() => {
       db.run('ALTER TABLE tests ADD COLUMN archived INTEGER DEFAULT 0', (e) => {
         if(e){ console.error('Failed to add archived column to tests:', e.message); }
         else { console.log('Added archived column to tests'); }
+      });
+    }
+    const hasAnswerMode = rows && rows.some(r => r.name === 'answer_mode');
+    if(!hasAnswerMode){
+      db.run("ALTER TABLE tests ADD COLUMN answer_mode TEXT DEFAULT 'deferred_summary'", (e) => {
+        if(e){ console.error('Failed to add answer_mode column to tests:', e.message); }
+        else {
+          console.log('Added answer_mode column to tests');
+          db.run("UPDATE tests SET answer_mode='deferred_summary' WHERE answer_mode IS NULL OR TRIM(answer_mode)=''", (normalizeErr) => {
+            if(normalizeErr){ console.error('Failed to normalize answer_mode in tests:', normalizeErr.message); }
+          });
+        }
+      });
+    } else {
+      db.run("UPDATE tests SET answer_mode='deferred_summary' WHERE answer_mode IS NULL OR TRIM(answer_mode)=''", (e) => {
+        if(e){ console.error('Failed to normalize answer_mode in tests:', e.message); }
       });
     }
   });
@@ -149,6 +166,22 @@ db.serialize(() => {
     FOREIGN KEY(student_id) REFERENCES students(id),
     FOREIGN KEY(test_id) REFERENCES tests(id)
   );`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS exam_session_questions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL,
+    question_id INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    choice_order_json TEXT DEFAULT '',
+    answered_at TEXT,
+    UNIQUE(session_id, question_id),
+    UNIQUE(session_id, position),
+    FOREIGN KEY(session_id) REFERENCES exam_sessions(id),
+    FOREIGN KEY(question_id) REFERENCES questions(id)
+  );`);
+
+  db.run('CREATE INDEX IF NOT EXISTS idx_exam_session_questions_session_position ON exam_session_questions(session_id, position)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_exam_session_questions_session_answered ON exam_session_questions(session_id, answered_at)');
 });
 
 module.exports = db;

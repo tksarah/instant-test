@@ -50,9 +50,16 @@ function assert(cond, msg){
     assert(student.status === 200 && student.body && student.body.id, '生徒作成に失敗しました');
     const studentCookie = extractCookie(student.headers);
     assert(studentCookie, '生徒セッションクッキーが必要です');
+    const studentId = student.body.id;
 
-    console.log('\nGET QUESTIONS');
-    const questions = await req('GET','/api/tests/' + encodeURIComponent(testId) + '/questions');
+    console.log('\nCREATE EXAM SESSION');
+    const session = await req('POST','/api/exam-sessions', { student_id: studentId, test_id: testId }, { Cookie: studentCookie });
+    console.log(session);
+    assert(session.status === 200 && session.body && session.body.id, '受験セッション作成に失敗しました');
+    const sessionId = session.body.id;
+
+    console.log('\nGET SESSION QUESTIONS');
+    const questions = await req('GET','/api/exam-sessions/' + encodeURIComponent(sessionId) + '/questions', null, { Cookie: studentCookie });
     console.log(questions);
     assert(questions.status === 200 && Array.isArray(questions.body) && questions.body.length > 0, '問題取得に失敗しました');
     const question = questions.body[0];
@@ -61,13 +68,18 @@ function assert(cond, msg){
     assert(choiceId, '選択肢IDが必要です');
 
     console.log('\nSUBMIT ANSWER (choice_id=1)');
-    const studentId = student.body.id;
-    const submit = await req('POST','/api/submit-answer', { student_id: studentId, test_id: testId, question_id: question.id, choice_id: choiceId }, { Cookie: studentCookie });
+    const submit = await req('POST','/api/submit-answer', { student_id: studentId, test_id: testId, question_id: question.id, choice_id: choiceId, session_id: sessionId }, { Cookie: studentCookie });
     console.log(submit);
     assert(submit.status === 200, '回答送信に失敗しました');
+    assert(!submit.body.feedback, 'deferred_summary モードでは即時フィードバックを返さない必要があります');
+
+    console.log('\nFINISH SESSION');
+    const finish = await req('PUT', '/api/exam-sessions/' + encodeURIComponent(sessionId) + '/finish', null, { Cookie: studentCookie });
+    console.log(finish);
+    assert(finish.status === 200, '受験終了に失敗しました');
 
     console.log('\nSUMMARY');
-    const summary = await req('GET', `/api/tests/${encodeURIComponent(testId)}/summary?student_id=${encodeURIComponent(studentId)}`, null, { Cookie: studentCookie });
+    const summary = await req('GET', `/api/tests/${encodeURIComponent(testId)}/summary?student_id=${encodeURIComponent(studentId)}&session_id=${encodeURIComponent(sessionId)}`, null, { Cookie: studentCookie });
     console.log(summary);
     assert(summary.status === 200 && summary.body && Array.isArray(summary.body.details), 'summary 取得に失敗しました');
 

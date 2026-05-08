@@ -10,7 +10,7 @@
   let lastSavedClassId = '';
   let lastSavedQuestions = [];
   let editingTestId = null;
-  let editingTestMeta = { description: '', public: 0, randomize: 0 };
+  let editingTestMeta = { description: '', public: 0, randomize: 0, answer_mode: 'deferred_summary' };
   const persistedDeletedQuestionIds = new Set();
   const MAX_QUESTIONS = 100;
   const MIN_CHOICES = 2;
@@ -403,7 +403,7 @@
     try{
       if(editingTestId){
         // update existing test
-        await requestJson('/api/tests/' + encodeURIComponent(editingTestId), { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name: name, description: editingTestMeta.description || '', public: editingTestMeta.public ? 1 : 0, randomize: editingTestMeta.randomize ? 1 : 0, class_id: classId || null }) }, 'テスト更新に失敗しました');
+        await requestJson('/api/tests/' + encodeURIComponent(editingTestId), { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name: name, description: editingTestMeta.description || '', public: editingTestMeta.public ? 1 : 0, randomize: editingTestMeta.randomize ? 1 : 0, answer_mode: editingTestMeta.answer_mode || 'deferred_summary', class_id: classId || null }) }, 'テスト更新に失敗しました');
         // process questions: update existing ones, create new ones
         for(const q of state.questions){
           if(q.id){
@@ -515,7 +515,8 @@
             editingTestMeta = {
               description: test.description || '',
               public: test.public ? 1 : 0,
-              randomize: test.randomize ? 1 : 0
+              randomize: test.randomize ? 1 : 0,
+              answer_mode: test.answer_mode === 'immediate_feedback' ? 'immediate_feedback' : 'deferred_summary'
             };
             if(!presetName) el('test-name').value = test.name || '';
             if(!presetClass){ const sel = el('class-select'); sel.value = test.class_id || ''; }
