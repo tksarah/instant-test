@@ -61,6 +61,13 @@ db.serialize(() => {
         else { console.log('Added teacher_id column to tests'); }
       });
     }
+    const hasArchived = rows && rows.some(r => r.name === 'archived');
+    if(!hasArchived){
+      db.run('ALTER TABLE tests ADD COLUMN archived INTEGER DEFAULT 0', (e) => {
+        if(e){ console.error('Failed to add archived column to tests:', e.message); }
+        else { console.log('Added archived column to tests'); }
+      });
+    }
   });
 
   db.run(`CREATE TABLE IF NOT EXISTS questions (

@@ -117,6 +117,13 @@
   }
 
   function getTeacherTestManagementState(test, questionCount){
+    if(test && test.archived){
+      return {
+        label: 'アーカイブ済み',
+        detail: '通常一覧から外しています。必要なときだけ表示して復元できます。',
+        tone: 'muted'
+      };
+    }
     const normalizedQuestionCount = Number(questionCount || 0);
     if(!normalizedQuestionCount){
       return {
@@ -213,8 +220,12 @@
     const [mode, setMode] = React.useState(sharedStudentAccess ? 'student' : 'teacher');
     const [teacherTestQuery, setTeacherTestQuery] = React.useState('');
     const [teacherFilterClassId, setTeacherFilterClassId] = React.useState('');
+    const [teacherArchiveView, setTeacherArchiveView] = React.useState('active');
     const [teacherTestViewMode, setTeacherTestViewMode] = React.useState('compact');
     const [expandedTeacherTests, setExpandedTeacherTests] = React.useState({});
+    const [editingTestId, setEditingTestId] = React.useState(null);
+    const [editingTestName, setEditingTestName] = React.useState('');
+    const [editingTestBusy, setEditingTestBusy] = React.useState(false);
     const [qrShareModal, setQrShareModal] = React.useState({
       open: false,
       loading: false,
@@ -246,6 +257,7 @@
     const [reportsSortKey, setReportsSortKey] = React.useState('finished_at');
     const [reportsSortDir, setReportsSortDir] = React.useState('desc'); // 'asc' or 'desc'
     const [reportFilterTest, setReportFilterTest] = React.useState('');
+    const [reportFilterClassId, setReportFilterClassId] = React.useState('');
     const [reportFilterUser, setReportFilterUser] = React.useState('');
     const [reportDatePreset, setReportDatePreset] = React.useState('all');
     const [reportDateFrom, setReportDateFrom] = React.useState('');
@@ -288,7 +300,7 @@
         setTeacherUser(me.teacher);
         return Promise.all([
           fetch('/api/classes').then(function(r){ return r.json(); }),
-          fetch('/api/tests').then(function(r){ return r.json(); })
+          fetch('/api/tests?include_archived=1').then(function(r){ return r.json(); })
         ]);
       }).then(function(results){
         if(!results) return;
@@ -394,15 +406,40 @@
         window.alert('そのテスト名は既に使われています。別の名前を指定してください');
         return;
       }
-      fetch('/api/tests',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({class_id:selectedClass?selectedClass.id:null, name:testName, public: testPublic, randomize: testRandomize})}).then(r=>r.json()).then(n=>{ setTests(prev=>prev.concat({id:n.id, name:testName, class_id:selectedClass?selectedClass.id:null, public: testPublic?1:0, randomize: testRandomize?1:0})); setTestName(''); setTestPublic(false); setTestRandomize(false); });
+      fetch('/api/tests',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({class_id:selectedClass?selectedClass.id:null, name:testName, public: testPublic, randomize: testRandomize})}).then(r=>r.json()).then(n=>{ setTests(prev=>prev.concat({id:n.id, name:testName, class_id:selectedClass?selectedClass.id:null, public: testPublic?1:0, randomize: testRandomize?1:0, archived: 0})); setTestName(''); setTestPublic(false); setTestRandomize(false); });
     }
-    function editTest(t){
-      const newName = window.prompt('テスト名を編集', t.name);
-      if(!newName || !newName.trim() || newName === t.name) return;
-      fetch('/api/tests/'+t.id, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name: newName, description: t.description || '', public: t.public || 0, randomize: t.randomize || 0 }) }).then(r=>r.json()).then(updated=>{
-        setTests(prev=> prev.map(x => x.id===updated.id ? updated : x));
-        setMessage('更新しました');
-      }).catch(()=> setMessage('テスト更新エラー'));
+    function startInlineTestRename(t){
+      setEditingTestId(t.id);
+      setEditingTestName(t.name || '');
+    }
+    function cancelInlineTestRename(){
+      if(editingTestBusy) return;
+      setEditingTestId(null);
+      setEditingTestName('');
+    }
+    function submitInlineTestRename(t){
+      const trimmedName = (editingTestName || '').trim();
+      if(editingTestBusy) return;
+      if(!trimmedName){
+        setMessage('テスト名を入力してください');
+        return;
+      }
+      if(trimmedName === (t.name || '').trim()){
+        cancelInlineTestRename();
+        return;
+      }
+      if(tests.some(function(item){ return item.id !== t.id && (item.name || '').trim() === trimmedName; })){
+        setMessage('そのテスト名は既に使われています。別の名前を指定してください');
+        return;
+      }
+      setEditingTestBusy(true);
+      updateTestRecord(t, { name: trimmedName }, 'テスト更新エラー', 'テスト名を更新しました').then(function(updated){
+        setEditingTestBusy(false);
+        if(updated){
+          setEditingTestId(null);
+          setEditingTestName('');
+        }
+      });
     }
 
     function deleteTest(t){
@@ -449,10 +486,13 @@
       setReportSummaryData({ loading: true });
       const testId = r.testId || r.test_id || r.testId;
       const studentId = r.studentId || r.student_id;
+      const sessionId = r.sessionId || r.session_id;
       try{
         // fetch per-question summary (which contains choice ids) and questions (to get choice texts)
+        const summaryUrl = '/api/tests/' + encodeURIComponent(testId) + '/summary?student_id=' + encodeURIComponent(studentId)
+          + (sessionId ? '&session_id=' + encodeURIComponent(sessionId) : '');
         const [sumRes, qRes] = await Promise.all([
-          fetch('/api/tests/' + encodeURIComponent(testId) + '/summary?student_id=' + encodeURIComponent(studentId)),
+          fetch(summaryUrl),
           fetch('/api/tests/' + encodeURIComponent(testId) + '/questions')
         ]);
         if(!sumRes.ok) throw new Error('summary fetch failed');
@@ -480,6 +520,36 @@
       }
     }
     function closeReportSummary(){ setReportSummaryOpen(false); setReportSummaryData(null); }
+
+    async function deleteReport(row){
+      const sessionId = row && (row.sessionId || row.session_id);
+      if(!sessionId){ setMessage('この記録は削除できません'); return; }
+      const dtRaw = row.finished_at || row.started_at || '';
+      let dtDisp = '日時不明';
+      try{ if(dtRaw) dtDisp = new Date(dtRaw).toLocaleString(); }catch(e){ dtDisp = dtRaw || '日時不明'; }
+      const label = (row.studentName || '不明な生徒') + ' / ' + (row.testName || '不明なテスト') + ' / ' + dtDisp;
+      if(!confirm('次の受験記録を削除しますか？\n\n' + label + '\n\nこの操作は元に戻せません。')) return;
+      try{
+        const res = await fetch('/api/exam-sessions/' + encodeURIComponent(sessionId), { method: 'DELETE' });
+        const json = await res.json().catch(() => null);
+        if(!res.ok){
+          setMessage((json && json.error) ? json.error : '受験記録の削除に失敗しました');
+          return;
+        }
+        setReports(prev => prev.filter(function(item){
+          const itemSessionId = item && (item.sessionId || item.session_id);
+          return String(itemSessionId) !== String(sessionId);
+        }));
+        setTotalReportsByStudent(null);
+        if(reportSummaryData && reportSummaryData.meta){
+          const openSessionId = reportSummaryData.meta.sessionId || reportSummaryData.meta.session_id;
+          if(String(openSessionId) === String(sessionId)) closeReportSummary();
+        }
+        setMessage('受験記録を削除しました');
+      }catch(e){
+        setMessage('受験記録の削除に失敗しました');
+      }
+    }
 
     // showUserSummary / closeUserSummary removed
     function generate(){ if(!textForAI || !window.selectedTestId){ setMessage('テキストとテスト選択が必要です'); return; } setMessage('生成中...'); fetch('/api/generate-questions',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ testId: window.selectedTestId, text: textForAI })}).then(r=>r.json()).then(j=>{ setMessage('生成完了: '+(j.length||0)+'問'); fetchQuestions(window.selectedTestId).then(qs=>{ setModalQuestions(qs || []); setModalOpen(true); }); }).catch(err=>setMessage('エラー')); }
@@ -509,6 +579,16 @@
       fetch('/api/tests/'+test.id, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name: test.name, description: test.description || '', public: newPublic, randomize: test.randomize || 0 }) }).then(r=>r.json()).then(updated=>{
         setTests(prev => prev.map(t => t.id===updated.id ? updated : t));
       }).catch(()=> setMessage('公開設定更新エラー'));
+    }
+    function toggleTestArchived(test){
+      const nextArchived = test.archived ? 0 : 1;
+      const nextPublic = nextArchived ? 0 : (test.public || 0);
+      updateTestRecord(
+        test,
+        { archived: nextArchived, public: nextPublic },
+        nextArchived ? 'アーカイブ更新エラー' : '復元エラー',
+        nextArchived ? 'アーカイブしました' : '通常一覧に戻しました'
+      );
     }
     async function openQrShareModal(test){
       if(!test || !test.id) return;
@@ -574,14 +654,15 @@
         description: Object.prototype.hasOwnProperty.call(overrides || {}, 'description') ? overrides.description : (test.description || ''),
         public: Object.prototype.hasOwnProperty.call(overrides || {}, 'public') ? overrides.public : (test.public || 0),
         randomize: Object.prototype.hasOwnProperty.call(overrides || {}, 'randomize') ? overrides.randomize : (test.randomize || 0),
-        class_id: Object.prototype.hasOwnProperty.call(overrides || {}, 'class_id') ? overrides.class_id : (test.class_id || null)
+        class_id: Object.prototype.hasOwnProperty.call(overrides || {}, 'class_id') ? overrides.class_id : (test.class_id || null),
+        archived: Object.prototype.hasOwnProperty.call(overrides || {}, 'archived') ? overrides.archived : (test.archived || 0)
       };
       return fetch('/api/tests/'+test.id, {
         method: 'PUT',
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify(payload)
       }).then(r=>r.json()).then(updated=>{
-        const merged = Object.assign({}, test, updated, { class_id: payload.class_id });
+        const merged = Object.assign({}, test, updated, { class_id: payload.class_id, archived: payload.archived });
         setTests(prev => prev.map(t => t.id===test.id ? merged : t));
         if(successMessage) setMessage(successMessage);
         return merged;
@@ -625,10 +706,13 @@
 
     // build list of test item elements from data (keep data->UI mapping pure)
     const normalizedTeacherQuery = (teacherTestQuery || '').trim().toLowerCase();
+    const activeTestsCount = tests.filter(function(t){ return !t.archived; }).length;
+    const archivedTestsCount = tests.filter(function(t){ return !!t.archived; }).length;
     const displayedTests = tests.filter(function(t){
+      const matchesArchive = teacherArchiveView === 'archived' ? !!t.archived : !t.archived;
       const matchesQuery = !normalizedTeacherQuery || (t.name || '').toLowerCase().includes(normalizedTeacherQuery);
       const matchesClass = !teacherFilterClassId || String(t.class_id || '') === String(teacherFilterClassId);
-      return matchesQuery && matchesClass;
+      return matchesArchive && matchesQuery && matchesClass;
     });
     const publicTestsCount = tests.filter(function(t){ return !!t.public; }).length;
     const draftTestsCount = tests.filter(function(t){ return !t.public; }).length;
@@ -690,7 +774,7 @@
           )
         )
       ),
-      e('div', { className: 'task-stat-grid compact' }, [
+      e('div', { className: 'task-stat-grid compact teacher-dashboard-stat-grid' }, [
         e('article', { key: 'teacher-stat-draft', className: 'task-stat-card' },
           e('span', { className: 'task-stat-card__label' }, '下書き'),
           e('strong', { className: 'task-stat-card__value' }, String(draftTestsCount)),
@@ -705,6 +789,11 @@
           e('span', { className: 'task-stat-card__label' }, 'クラス割当済み'),
           e('strong', { className: 'task-stat-card__value' }, String(assignedTestsCount)),
           e('span', { className: 'task-stat-card__note' }, '共有 QR を出せる状態')
+        ),
+        e('article', { key: 'teacher-stat-archived', className: 'task-stat-card' },
+          e('span', { className: 'task-stat-card__label' }, 'アーカイブ済み'),
+          e('strong', { className: 'task-stat-card__value' }, String(archivedTestsCount)),
+          e('span', { className: 'task-stat-card__note' }, '通常一覧から外して保管中のテスト')
         )
       ]),
       initialDataLoading ? e('div', { className: 'teacher-status-strip', role: 'status' }, 'クラスとテストの一覧を読み込んでいます。') : null,
@@ -757,44 +846,98 @@
             ),
             e('div', { className: 'teacher-test-toolbar' },
               e('div', { className: 'task-results-meta' },
-                displayedTests.length + '件を表示中' + (teacherTestQuery || teacherFilterClassId ? ' / 条件あり' : ' / 全件表示')
+                displayedTests.length + '件を表示中 / 運用中 ' + activeTestsCount + '件 / アーカイブ済み ' + archivedTestsCount + '件' + (teacherTestQuery || teacherFilterClassId ? ' / 条件あり' : '')
               ),
-              e('div', { className: 'teacher-test-view-switch', role: 'group', 'aria-label': 'テストカード表示切替' },
-                e('button', {
-                  onClick: function(){ setTeacherTestViewMode('compact'); },
-                  className: teacherTestViewMode === 'compact' ? 'mode-tab is-active' : 'mode-tab',
-                  type: 'button',
-                  'aria-pressed': teacherTestViewMode === 'compact'
-                }, '簡易表示'),
-                e('button', {
-                  onClick: function(){ setTeacherTestViewMode('detailed'); },
-                  className: teacherTestViewMode === 'detailed' ? 'mode-tab is-active' : 'mode-tab',
-                  type: 'button',
-                  'aria-pressed': teacherTestViewMode === 'detailed'
-                }, '詳細表示')
+              e('div', { className: 'teacher-test-toolbar__actions' },
+                e('div', { className: 'teacher-test-scope-switch', role: 'group', 'aria-label': '表示するテスト範囲' },
+                  e('button', {
+                    onClick: function(){ setTeacherArchiveView('active'); },
+                    className: teacherArchiveView === 'active' ? 'mode-tab is-active' : 'mode-tab',
+                    type: 'button',
+                    'aria-pressed': teacherArchiveView === 'active'
+                  }, '運用中'),
+                  e('button', {
+                    onClick: function(){ setTeacherArchiveView('archived'); },
+                    className: teacherArchiveView === 'archived' ? 'mode-tab is-active' : 'mode-tab',
+                    type: 'button',
+                    'aria-pressed': teacherArchiveView === 'archived'
+                  }, 'アーカイブ済み')
+                ),
+                e('div', { className: 'teacher-test-view-switch', role: 'group', 'aria-label': 'テストカード表示切替' },
+                  e('button', {
+                    onClick: function(){ setTeacherTestViewMode('compact'); },
+                    className: teacherTestViewMode === 'compact' ? 'mode-tab is-active' : 'mode-tab',
+                    type: 'button',
+                    'aria-pressed': teacherTestViewMode === 'compact'
+                  }, '簡易表示'),
+                  e('button', {
+                    onClick: function(){ setTeacherTestViewMode('detailed'); },
+                    className: teacherTestViewMode === 'detailed' ? 'mode-tab is-active' : 'mode-tab',
+                    type: 'button',
+                    'aria-pressed': teacherTestViewMode === 'detailed'
+                  }, '詳細表示')
+                )
               )
             ),
             displayedTests.length ? e('div', { className: cx('task-card-grid', teacherTestViewMode === 'detailed' && 'teacher-test-grid-detailed') }, displayedTests.map(function(t){
               const questionCount = testQuestionCounts[t.id] || 0;
               const classNameForTest = (classes.find(function(c){ return c.id === t.class_id; }) || {}).name || '未割当';
-              const canShareTest = Number(questionCount) > 0 && !!t.public && !!t.class_id;
+              const canShareTest = Number(questionCount) > 0 && !!t.public && !!t.class_id && !t.archived;
               const managementState = getTeacherTestManagementState(t, questionCount);
               const isDetailedCard = teacherTestViewMode === 'detailed' || !!expandedTeacherTests[t.id];
+              const isRenamingTest = editingTestId === t.id;
               return e('article', {
                 key: t.id,
-                draggable: true,
+                draggable: !isRenamingTest,
                 onDragStart: function(ev){ onDragStartTest(ev, t); },
                 className: cx('task-card', 'teacher-test-card', 'teacher-test-card--' + managementState.tone, isDetailedCard && 'is-detailed')
               },
                 e('div', { className: 'task-card-header teacher-test-card__header' },
                   e('div', { className: 'teacher-test-card__title-block' },
-                    e('h4', { className: 'task-card-title', 'data-title-icon': 'test' }, t.name),
+                    isRenamingTest
+                      ? e('form', {
+                          className: 'teacher-test-card__title-editor task-card-title',
+                          'data-title-icon': 'test',
+                          onSubmit: function(ev){
+                            ev.preventDefault();
+                            submitInlineTestRename(t);
+                          }
+                        },
+                          e('input', {
+                            value: editingTestName,
+                            onChange: function(ev){ setEditingTestName(ev.target.value); },
+                            onKeyDown: function(ev){
+                              if(ev.key === 'Escape'){
+                                ev.preventDefault();
+                                cancelInlineTestRename();
+                              }
+                            },
+                            className: 'teacher-test-card__title-input',
+                            disabled: editingTestBusy,
+                            autoFocus: true,
+                            'aria-label': 'テスト名を編集'
+                          }),
+                          e('div', { className: 'teacher-test-card__title-actions' },
+                            e('button', { className: 'btn btn-small btn-primary', type: 'submit', disabled: editingTestBusy }, editingTestBusy ? '保存中...' : '保存'),
+                            e('button', { className: 'btn btn-small btn-ghost', type: 'button', onClick: cancelInlineTestRename, disabled: editingTestBusy }, 'キャンセル')
+                          )
+                        )
+                      : e('h4', { className: 'task-card-title', 'data-title-icon': 'test' },
+                          e('button', {
+                            type: 'button',
+                            className: 'teacher-test-card__title-button',
+                            onClick: function(){ startInlineTestRename(t); },
+                            title: 'クリックして名称変更',
+                            'aria-label': 'テスト名を編集'
+                          }, t.name)
+                        ),
                     e('div', { className: 'teacher-test-card__overview' },
                       e('span', { className: 'teacher-test-state is-' + managementState.tone }, managementState.label),
                       e('p', { className: 'teacher-test-card__helper' }, managementState.detail)
                     )
                   ),
                   e('div', { className: 'task-badges teacher-test-card__badges' },
+                    t.archived ? e('span', { className: 'badge badge-muted' }, 'アーカイブ済み') : null,
                     e('span', { className: !!t.public ? 'badge badge-success' : 'badge' }, !!t.public ? '公開中' : '下書き'),
                     e('span', { className: !!t.randomize ? 'badge badge-accent' : 'badge badge-muted' }, !!t.randomize ? 'ランダム' : '固定順')
                   )
@@ -823,17 +966,17 @@
                 ),
                 isDetailedCard ? e('div', { className: 'teacher-test-card__details' },
                   e('div', { className: 'task-card-controls teacher-test-card__controls' },
-                    e('label', { className: 'task-toggle compact' }, e('input', { type: 'checkbox', checked: !!t.public, onChange: function(){ toggleTestPublic(t); } }), e('span', null, '公開')),
+                    e('label', { className: 'task-toggle compact' }, e('input', { type: 'checkbox', checked: !!t.public, onChange: function(){ toggleTestPublic(t); }, disabled: !!t.archived }), e('span', null, '公開')),
                     e('label', { className: 'task-toggle compact' }, e('input', { type: 'checkbox', checked: !!t.randomize, onChange: function(){ updateTestRecord(t, { randomize: t.randomize ? 0 : 1 }, 'ランダム設定更新エラー'); } }), e('span', null, 'ランダム'))
                   ),
                   e('p', { className: 'teacher-inline-note teacher-test-card__detail-note' }, managementState.detail),
                   e('div', { className: 'task-card-footer teacher-card-footer teacher-test-card__secondary-actions' },
-                    e('button', { onClick: function(){ editTest(t); }, className: 'btn btn-small btn-ghost', type: 'button' }, '名称変更'),
+                    e('button', { onClick: function(){ toggleTestArchived(t); }, className: 'btn btn-small btn-ghost', type: 'button' }, t.archived ? '復元' : 'アーカイブ'),
                     e('button', { onClick: function(){ deleteTest(t); }, className: 'btn btn-small btn-ghost', type: 'button' }, '削除')
                   )
                 ) : null
               );
-            })) : e('div', { className: 'task-empty' }, teacherTestQuery || teacherFilterClassId ? '条件に一致するテストがありません' : 'テストがまだありません')
+            })) : e('div', { className: 'task-empty' }, teacherTestQuery || teacherFilterClassId ? '条件に一致するテストがありません' : (teacherArchiveView === 'archived' ? 'アーカイブ済みテストはありません' : 'テストがまだありません'))
           )
         ),
         e('aside', { className: 'teacher-workspace-side' },
@@ -1362,8 +1505,10 @@
       const filteredReports = (reports || []).filter(r => {
         const tn = (r.testName || '').toLowerCase();
       const un = (r.studentName || '').toLowerCase();
+      const rowClassId = r.classId || r.class_id || '';
         // If a test is selected from the dropdown, match exact test name (case-insensitive)
         if(reportFilterTest && tn !== (reportFilterTest||'').toLowerCase()) return false;
+      if(reportFilterClassId && String(rowClassId) !== String(reportFilterClassId)) return false;
       if(reportFilterUser && !un.includes((reportFilterUser||'').toLowerCase())) return false;
       // date range filter
       try{
@@ -1683,7 +1828,7 @@
         e('div', { className: 'task-section-heading' },
           e('div', { 'data-title-icon': 'filter' },
             e('h2', null, '絞り込み'),
-            e('p', { className: 'section-note' }, 'テスト名、生徒名、期間で絞り込みます。')
+            e('p', { className: 'section-note' }, 'テスト名、クラス、生徒名、期間で絞り込みます。')
           )
         ),
         e('div', { className: 'controls' },
@@ -1691,6 +1836,10 @@
           e('select', { value: reportFilterTest, onChange: ev => { setReportFilterTest(ev.target.value); setReportsPage(1); } },
             e('option', { value: '' }, 'テスト名でフィルタ（すべて）'),
             (tests || []).map(function(t){ return e('option', { key: t.id, value: t.name || '' }, t.name || ('テスト ' + t.id)); })
+          ),
+          e('select', { value: reportFilterClassId, onChange: ev => { setReportFilterClassId(ev.target.value); setReportsPage(1); } },
+            e('option', { value: '' }, 'クラスでフィルタ（すべて）'),
+            (classes || []).map(function(c){ return e('option', { key: c.id, value: String(c.id) }, c.name || ('クラス ' + c.id)); })
           ),
           e('input', { placeholder: '生徒名で検索', value: reportFilterUser, onChange: ev => { setReportFilterUser(ev.target.value); setReportsPage(1); } }),
           e('select', { value: reportDatePreset, onChange: ev => { setReportDatePreset(ev.target.value); setReportsPage(1); } },
@@ -1732,7 +1881,10 @@
                     e('td', null, e('span', { className: 'mono' }, String(row.score || 0))),
                     e('td', null, e('span', { className: 'mono' }, String(row.maxScore || 0))),
                     e('td', null, e('span', { className: pctClass }, pct + '%')),
-                    e('td', null, e('button', { 'data-student': row.studentId||'', 'data-test': row.testId||'', onClick: function(){ showReportSummary(row); }, className: 'btn btn-small btn-ghost', type: 'button' }, '詳細'))
+                    e('td', null,
+                      e('button', { 'data-student': row.studentId||'', 'data-test': row.testId||'', onClick: function(){ showReportSummary(row); }, className: 'btn btn-small btn-ghost', type: 'button' }, '詳細'),
+                      e('button', { onClick: function(){ deleteReport(row); }, className: 'btn btn-small btn-ghost', type: 'button', style: { marginLeft: 8 } }, '削除')
+                    )
                   );
                 })
               )
@@ -1881,7 +2033,6 @@
           )
         )
       ),
-      message ? e('div', { className: 'app-status', 'aria-live': 'polite' }, message) : null,
       mode === 'teacher' ? teacherNode : (mode === 'student' ? studentNode : reportsNode),
       summaryModal,
       qrShareNode

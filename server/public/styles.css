@@ -282,8 +282,19 @@ legend{padding:0 8px;color:var(--text-strong);font-weight:700}
   margin-bottom:14px;
 }
 
+.teacher-test-toolbar__actions{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:8px;
+  flex-wrap:wrap;
+}
+
 .teacher-test-toolbar .task-results-meta{margin-bottom:0}
 
+.task-stat-grid.compact.teacher-dashboard-stat-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
+
+.teacher-test-scope-switch,
 .teacher-test-view-switch{
   display:flex;
   align-items:center;
@@ -291,6 +302,7 @@ legend{padding:0 8px;color:var(--text-strong);font-weight:700}
   flex-wrap:wrap;
 }
 
+.teacher-test-scope-switch .mode-tab,
 .teacher-test-view-switch .mode-tab{
   padding:8px 12px;
   font-size:13px;
@@ -1660,6 +1672,52 @@ label{font-size:13px;color:var(--text-muted);font-weight:500}
   min-width:0;
 }
 
+.teacher-test-card__title-button{
+  padding:0;
+  border:0;
+  background:transparent;
+  font:inherit;
+  color:inherit;
+  text-align:left;
+  cursor:text;
+}
+
+.teacher-test-card__title-button:hover,
+.teacher-test-card__title-button:focus-visible{
+  text-decoration:underline;
+  text-underline-offset:5px;
+}
+
+.teacher-test-card__title-editor{
+  flex-wrap:wrap;
+  align-items:center;
+  width:100%;
+  margin-bottom:0;
+}
+
+.teacher-test-card__title-input{
+  flex:1 1 260px;
+  min-width:0;
+  padding:10px 12px;
+  border:1px solid rgba(44,74,103,0.18);
+  border-radius:14px;
+  font:inherit;
+  color:var(--text-strong);
+  background:#fff;
+}
+
+.teacher-test-card__title-input:focus{
+  outline:none;
+  border-color:rgba(31,111,235,0.42);
+  box-shadow:0 0 0 4px rgba(31,111,235,0.12);
+}
+
+.teacher-test-card__title-actions{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+}
+
 .teacher-test-card__overview{
   display:flex;
   align-items:center;
@@ -1904,7 +1962,9 @@ kbd{background:#f7f9fb;border:1px solid var(--border-soft);box-shadow:none}
   .teacher-step-list,
   .student-preview-banner__stats,
   .student-summary-stats{grid-template-columns:1fr 1fr}
+  .task-stat-grid.compact.teacher-dashboard-stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   .teacher-test-toolbar{flex-direction:column;align-items:flex-start}
+  .teacher-test-toolbar__actions{justify-content:flex-start;width:100%}
   .teacher-class-card__top{grid-template-columns:1fr}
 }
 
@@ -1939,7 +1999,10 @@ kbd{background:#f7f9fb;border:1px solid var(--border-soft);box-shadow:none}
   .student-summary-stats,
   .student-test-grid,
   .task-card-grid{grid-template-columns:1fr}
+  .task-stat-grid.compact.teacher-dashboard-stat-grid{grid-template-columns:1fr}
+  .teacher-test-scope-switch,
   .teacher-test-view-switch{width:100%}
+  .teacher-test-scope-switch .mode-tab,
   .teacher-test-view-switch .mode-tab{flex:1;justify-content:center}
   .teacher-test-card__header,
   .teacher-test-card__overview,
