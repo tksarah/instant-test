@@ -280,6 +280,8 @@
     const [teacherTestQuery, setTeacherTestQuery] = React.useState('');
     const [teacherFilterClassId, setTeacherFilterClassId] = React.useState('');
     const [teacherArchiveView, setTeacherArchiveView] = React.useState('active');
+    const [teacherActiveClassViewId, setTeacherActiveClassViewId] = React.useState('');
+    const [teacherArchivedClassViewId, setTeacherArchivedClassViewId] = React.useState('');
     const [teacherTestViewMode, setTeacherTestViewMode] = React.useState('compact');
     const [expandedTeacherTests, setExpandedTeacherTests] = React.useState({});
     const [editingTestId, setEditingTestId] = React.useState(null);
@@ -904,14 +906,43 @@
 
     // build list of test item elements from data (keep data->UI mapping pure)
     const normalizedTeacherQuery = (teacherTestQuery || '').trim().toLowerCase();
-    const activeTestsCount = tests.filter(function(t){ return !t.archived; }).length;
-    const archivedTestsCount = tests.filter(function(t){ return !!t.archived; }).length;
+    const activeTests = tests.filter(function(t){ return !t.archived; });
+    const activeTestsCount = activeTests.length;
+    const archivedTests = tests.filter(function(t){ return !!t.archived; });
+    const archivedTestsCount = archivedTests.length;
+    const unassignedClassViewKey = '__unassigned';
+    const activeScopeTests = teacherArchiveView === 'archived' ? archivedTests : activeTests;
+    const activeScopeClassViewId = teacherArchiveView === 'archived' ? teacherArchivedClassViewId : teacherActiveClassViewId;
+    const isClassOverview = !activeScopeClassViewId;
+    const isClassDetail = !!activeScopeClassViewId;
+    const isArchivedClassOverview = teacherArchiveView === 'archived' && !teacherArchivedClassViewId;
+    const isArchivedClassDetail = teacherArchiveView === 'archived' && !!teacherArchivedClassViewId;
+    const isActiveClassOverview = teacherArchiveView === 'active' && !teacherActiveClassViewId;
+    const isActiveClassDetail = teacherArchiveView === 'active' && !!teacherActiveClassViewId;
     const displayedTests = tests.filter(function(t){
       const matchesArchive = teacherArchiveView === 'archived' ? !!t.archived : !t.archived;
       const matchesQuery = !normalizedTeacherQuery || (t.name || '').toLowerCase().includes(normalizedTeacherQuery);
-      const matchesClass = !teacherFilterClassId || isTestAssignedToClass(t, teacherFilterClassId);
+      const matchesClass = !activeScopeClassViewId
+        ? false
+        : (activeScopeClassViewId === unassignedClassViewKey ? getTestClassIds(t).length === 0 : isTestAssignedToClass(t, activeScopeClassViewId));
       return matchesArchive && matchesQuery && matchesClass;
     });
+    const scopeClassCards = classes.map(function(c){
+      return {
+        id: String(c.id),
+        name: c.name,
+        count: activeScopeTests.filter(function(t){ return isTestAssignedToClass(t, c.id); }).length,
+        empty: false
+      };
+    }).concat([{
+      id: unassignedClassViewKey,
+      name: '未割当',
+      count: activeScopeTests.filter(function(t){ return getTestClassIds(t).length === 0; }).length,
+      empty: true
+    }]);
+    const archivedClassCards = scopeClassCards;
+    const selectedScopeClassCard = scopeClassCards.find(function(card){ return String(card.id) === String(activeScopeClassViewId); }) || null;
+    const selectedArchivedClassCard = selectedScopeClassCard;
     const publicTestsCount = tests.filter(function(t){ return !!t.public; }).length;
     const draftTestsCount = tests.filter(function(t){ return !t.public; }).length;
     const assignedTestsCount = tests.filter(function(t){ return getTestClassIds(t).length > 0; }).length;
@@ -1018,50 +1049,72 @@
               e('div', { 'data-title-icon': 'list' },
                 e('h2', null, 'テストの管理')
               ),
-              e('span', { className: 'task-chip task-chip-muted' }, '共有 QR は1問以上作成・公開・クラス割当後に有効')
+              e('span', { className: 'task-chip task-chip-muted' }, isClassOverview ? (teacherArchiveView === 'archived' ? 'クラスを選択してアーカイブ済みテストを確認' : 'クラスを選択して運用中テストを確認') : '共有 QR は1問以上作成・公開・クラス割当後に有効')
             ),
-            e('div', { className: 'task-filter-bar' },
+            isClassOverview ? null : e('div', { className: 'task-filter-bar' },
               e('input', {
                 value: teacherTestQuery,
                 onChange: function(ev){ setTeacherTestQuery(ev.target.value); },
                 placeholder: 'テスト名で検索',
                 'aria-label': 'テスト名で検索'
               }),
-              e('select', {
-                value: teacherFilterClassId,
-                onChange: function(ev){ setTeacherFilterClassId(ev.target.value); },
-                'aria-label': 'クラスで絞り込み'
-              }, [
-                e('option', { key: '__all_filter', value: '' }, 'すべてのクラス')
-              ].concat(classes.map(function(c){
-                return e('option', { key: c.id, value: c.id }, c.name);
-              }))),
+              isClassDetail
+                ? e('button', {
+                    onClick: function(){
+                      if(teacherArchiveView === 'archived') setTeacherArchivedClassViewId('');
+                      else setTeacherActiveClassViewId('');
+                      setTeacherTestQuery('');
+                    },
+                    className: 'btn btn-ghost',
+                    type: 'button'
+                  }, 'クラス一覧へ戻る')
+                : e('select', {
+                    value: teacherFilterClassId,
+                    onChange: function(ev){ setTeacherFilterClassId(ev.target.value); },
+                    'aria-label': 'クラスで絞り込み'
+                  }, [
+                    e('option', { key: '__all_filter', value: '' }, 'すべてのクラス')
+                  ].concat(classes.map(function(c){
+                    return e('option', { key: c.id, value: c.id }, c.name);
+                  }))),
               e('button', {
-                onClick: function(){ setTeacherTestQuery(''); setTeacherFilterClassId(''); },
+                onClick: function(){
+                  setTeacherTestQuery('');
+                  if(isClassDetail){
+                    if(teacherArchiveView === 'archived') setTeacherArchivedClassViewId('');
+                    else setTeacherActiveClassViewId('');
+                  } else {
+                    setTeacherFilterClassId('');
+                  }
+                },
                 className: 'btn btn-ghost',
                 type: 'button'
               }, '条件をクリア')
             ),
             e('div', { className: 'teacher-test-toolbar' },
               e('div', { className: 'task-results-meta' },
-                displayedTests.length + '件を表示中 / 運用中 ' + activeTestsCount + '件 / アーカイブ済み ' + archivedTestsCount + '件' + (teacherTestQuery || teacherFilterClassId ? ' / 条件あり' : '')
+                isClassOverview
+                  ? (teacherArchiveView === 'archived' ? 'クラスを選択してアーカイブ済みテストを確認' : 'クラスを選択して運用中テストを確認')
+                  : (isClassDetail
+                      ? ((selectedScopeClassCard ? selectedScopeClassCard.name : '選択中クラス') + ' の' + (teacherArchiveView === 'archived' ? 'アーカイブ済み ' : '運用中 ') + displayedTests.length + '件' + (teacherTestQuery ? ' / 条件あり' : ''))
+                      : (displayedTests.length + '件を表示中 / 運用中 ' + activeTestsCount + '件 / アーカイブ済み ' + archivedTestsCount + '件' + (teacherTestQuery || teacherFilterClassId ? ' / 条件あり' : '')))
               ),
               e('div', { className: 'teacher-test-toolbar__actions' },
                 e('div', { className: 'teacher-test-scope-switch', role: 'group', 'aria-label': '表示するテスト範囲' },
                   e('button', {
-                    onClick: function(){ setTeacherArchiveView('active'); },
+                    onClick: function(){ setTeacherArchiveView('active'); setTeacherArchivedClassViewId(''); setTeacherActiveClassViewId(''); setTeacherTestQuery(''); },
                     className: teacherArchiveView === 'active' ? 'mode-tab is-active' : 'mode-tab',
                     type: 'button',
                     'aria-pressed': teacherArchiveView === 'active'
                   }, '運用中'),
                   e('button', {
-                    onClick: function(){ setTeacherArchiveView('archived'); },
+                    onClick: function(){ setTeacherArchiveView('archived'); setTeacherArchivedClassViewId(''); setTeacherActiveClassViewId(''); setTeacherFilterClassId(''); setTeacherTestQuery(''); },
                     className: teacherArchiveView === 'archived' ? 'mode-tab is-active' : 'mode-tab',
                     type: 'button',
                     'aria-pressed': teacherArchiveView === 'archived'
                   }, 'アーカイブ済み')
                 ),
-                e('div', { className: 'teacher-test-view-switch', role: 'group', 'aria-label': 'テストカード表示切替' },
+                true ? null : e('div', { className: 'teacher-test-view-switch', role: 'group', 'aria-label': 'テストカード表示切替' },
                   e('button', {
                     onClick: function(){ setTeacherTestViewMode('compact'); },
                     className: teacherTestViewMode === 'compact' ? 'mode-tab is-active' : 'mode-tab',
@@ -1077,7 +1130,28 @@
                 )
               )
             ),
-            displayedTests.length ? e('div', { className: cx('task-card-grid', teacherTestViewMode === 'detailed' && 'teacher-test-grid-detailed') }, displayedTests.map(function(t){
+            isClassOverview ? e('div', { className: 'archive-class-grid' }, scopeClassCards.map(function(card){
+              return e('button', {
+                key: card.id,
+                className: cx('archive-class-card', card.count === 0 && 'is-empty', card.empty && 'is-unassigned'),
+                type: 'button',
+                onClick: function(){
+                  if(teacherArchiveView === 'archived') setTeacherArchivedClassViewId(card.id);
+                  else setTeacherActiveClassViewId(card.id);
+                  setTeacherTestQuery('');
+                }
+              },
+                e('span', { className: 'archive-class-card__main' },
+                  e('span', { className: 'archive-class-card__label' }, card.empty ? '配布先なし' : 'クラス'),
+                  e('strong', { className: 'archive-class-card__name' }, card.name)
+                ),
+                e('span', { className: 'archive-class-card__count' }, card.count + '件'),
+                e('span', { className: 'archive-class-card__status' },
+                  e('span', { className: 'archive-class-card__hint' }, card.count ? '一覧を確認できます' : (teacherArchiveView === 'archived' ? 'アーカイブ済みなし' : '運用中なし')),
+                  e('span', { className: 'archive-class-card__action' }, '開く')
+                )
+              );
+            })) : displayedTests.length ? e('div', { className: 'teacher-test-list' }, displayedTests.map(function(t){
               const questionCount = testQuestionCounts[t.id] || 0;
               const classNameForTest = (classes.find(function(c){ return c.id === t.class_id; }) || {}).name || '未割当';
               const canShareTest = Number(questionCount) > 0 && !!t.public && !!t.class_id && !t.archived;
@@ -1086,7 +1160,7 @@
               const displayClassNameForTest = getAssignmentLabel(t, classes);
               const canShareByAssignments = Number(questionCount) > 0 && !!t.public && assignedClassIds.length > 0 && !t.archived;
               const managementState = getTeacherTestManagementState(t, questionCount);
-              const isDetailedCard = teacherTestViewMode === 'detailed' || !!expandedTeacherTests[t.id];
+              const isDetailedCard = !!expandedTeacherTests[t.id];
               const isRenamingTest = editingTestId === t.id;
               const teacherNote = (t.teacher_note || '').trim();
               const teacherNoteDraft = getTeacherNoteDraft(t);
@@ -1097,9 +1171,9 @@
                 key: t.id,
                 draggable: false,
                 onDragStart: function(ev){ onDragStartTest(ev, t); },
-                className: cx('task-card', 'teacher-test-card', 'teacher-test-card--' + managementState.tone, isDetailedCard && 'is-detailed')
+                className: cx('teacher-test-row', 'teacher-test-card', 'teacher-test-card--' + managementState.tone, isDetailedCard && 'is-detailed')
               },
-                e('div', { className: 'task-card-header teacher-test-card__header' },
+                e('div', { className: 'teacher-test-row__main' },
                   e('div', { className: 'teacher-test-card__title-block' },
                     isRenamingTest
                       ? e('form', {
@@ -1151,7 +1225,8 @@
                     e('span', { className: isImmediateFeedbackMode(t) ? 'badge badge-accent' : 'badge badge-muted' }, getAnswerModeLabel(t))
                   )
                 ),
-                e('div', { className: 'teacher-test-card__summary-grid' },
+                e('div', { className: 'teacher-test-row__meta' },
+                  e('div', { className: 'teacher-test-card__summary-grid' },
                   e('div', { className: 'teacher-test-meta' },
                     e('span', { className: 'teacher-test-meta__label' }, 'クラス'),
                     e('strong', { className: 'teacher-test-meta__value' }, displayClassNameForTest)
@@ -1160,20 +1235,19 @@
                     e('span', { className: 'teacher-test-meta__label' }, '問題数'),
                     e('strong', { className: 'teacher-test-meta__value' }, questionCount + '問')
                   )
+                  )
                 ),
-                teacherNote ? e('p', { className: 'teacher-test-note-preview' }, teacherNote) : null,
-                e('div', { className: 'teacher-test-card__primary-actions' },
-                  e('a', { href: '/create_test.html?class_id=' + encodeURIComponent(t.class_id || '') + '&name=' + encodeURIComponent(t.name || '') + '&test_id=' + encodeURIComponent(t.id), className: 'btn btn-small btn-primary' }, '問題管理'),
-                  e('button', { onClick: function(){ openAssignmentModal(t); }, className: 'btn btn-small btn-ghost', type: 'button' }, '配布先'),
-                  e('button', { onClick: function(){ openClassQrShareModal(t); }, className: 'btn btn-small btn-secondary', type: 'button', disabled: !canShareByAssignments }, '共有 QR'),
-                  teacherTestViewMode === 'compact'
-                    ? e('button', {
-                        onClick: function(){ toggleTeacherTestExpanded(t.id); },
-                        className: 'btn btn-small btn-ghost',
-                        type: 'button',
-                        'aria-expanded': isDetailedCard
-                      }, isDetailedCard ? '詳細を隠す' : '詳細')
-                    : null
+                e('div', { className: 'teacher-test-row__actions teacher-test-card__primary-actions' },
+                  e('a', { href: '/create_test.html?class_id=' + encodeURIComponent(t.class_id || '') + '&name=' + encodeURIComponent(t.name || '') + '&test_id=' + encodeURIComponent(t.id), className: 'btn btn-small btn-primary teacher-test-action teacher-test-action--primary' }, '問題管理'),
+                  e('button', { onClick: function(){ openAssignmentModal(t); }, className: 'btn btn-small btn-ghost teacher-test-action teacher-test-action--secondary', type: 'button' }, '配布先'),
+                  t.archived ? null : e('button', { onClick: function(){ openClassQrShareModal(t); }, className: 'btn btn-small btn-secondary teacher-test-action teacher-test-action--secondary', type: 'button', disabled: !canShareByAssignments }, '共有 QR'),
+                  t.archived ? e('button', { onClick: function(){ toggleTestArchived(t); }, className: 'btn btn-small btn-ghost teacher-test-action teacher-test-action--secondary', type: 'button' }, '復元') : null,
+                  e('button', {
+                    onClick: function(){ toggleTeacherTestExpanded(t.id); },
+                    className: 'btn btn-small btn-ghost teacher-test-action teacher-test-action--secondary',
+                    type: 'button',
+                    'aria-expanded': isDetailedCard
+                  }, isDetailedCard ? '詳細を隠す' : '詳細')
                 ),
                 isDetailedCard ? e('div', { className: 'teacher-test-card__details' },
                   e('div', { className: 'teacher-assignment-chips' },
@@ -1214,7 +1288,7 @@
                   )
                 ) : null
               );
-            })) : e('div', { className: 'task-empty' }, teacherTestQuery || teacherFilterClassId ? '条件に一致するテストがありません' : (teacherArchiveView === 'archived' ? 'アーカイブ済みテストはありません' : 'テストがまだありません'))
+            })) : e('div', { className: 'task-empty' }, teacherTestQuery ? '条件に一致するテストがありません' : (teacherArchiveView === 'archived' ? 'このクラスのアーカイブ済みテストはありません' : 'このクラスの運用中テストはありません'))
           )
         ),
         e('aside', { className: 'teacher-workspace-side' },
