@@ -553,7 +553,6 @@ async function getTestSetItems(setIds, studentId){
      JOIN tests t ON t.id=tsi.test_id
      LEFT JOIN questions q ON q.test_id=t.id
      WHERE tsi.set_id IN (${placeholders})
-       AND (t.archived IS NULL OR t.archived=0)
      GROUP BY tsi.set_id, tsi.position, t.id
      ORDER BY tsi.set_id ASC, tsi.position ASC`,
     setIds
@@ -586,6 +585,7 @@ async function getTestSetItems(setIds, studentId){
       name: row.name,
       description: row.description || '',
       public: row.public ? 1 : 0,
+      archived: row.archived ? 1 : 0,
       randomize: row.randomize ? 1 : 0,
       answer_mode: normalizeAnswerMode(row.answer_mode),
       question_count: row.question_count || 0,
@@ -958,7 +958,7 @@ function authorizeStudentTestAccess(req, res, testId, studentId, cb){
         return cb({ studentId: requestedStudentId, test: ownedTest, actor: 'teacher' });
       }
 
-      const test = await dbGetAsync('SELECT id, class_id, public, randomize, answer_mode FROM tests WHERE id=? AND (archived IS NULL OR archived=0)', [requestedTestId]);
+      const test = await dbGetAsync('SELECT id, class_id, public, randomize, answer_mode, archived FROM tests WHERE id=?', [requestedTestId]);
       if(!test) return res.status(404).json({ error: 'not_found' });
       if(!req.student) return res.status(401).json({ error: 'unauthorized' });
       if(req.student.id !== requestedStudentId) return res.status(403).json({ error: 'forbidden' });

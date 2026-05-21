@@ -311,6 +311,7 @@
     const [setPublic, setSetPublic] = React.useState(false);
     const [setClassIds, setSetClassIds] = React.useState([]);
     const [setTestIds, setSetTestIds] = React.useState([]);
+    const [setTestSourceTab, setSetTestSourceTab] = React.useState('public');
     const [textForAI, setTextForAI] = React.useState('');
     const [message, setMessage] = React.useState('');
     const [questions, setQuestions] = React.useState([]);
@@ -1110,6 +1111,9 @@
     const activeTestsCount = activeTests.length;
     const archivedTests = tests.filter(function(t){ return !!t.archived; });
     const archivedTestsCount = archivedTests.length;
+    const publicSetCandidateTests = tests.filter(function(t){ return !!t.public && !t.archived; });
+    const archivedSetCandidateTests = tests.filter(function(t){ return !!t.archived; });
+    const visibleSetCandidateTests = setTestSourceTab === 'archived' ? archivedSetCandidateTests : publicSetCandidateTests;
     const unassignedClassViewKey = '__unassigned';
     const activeScopeTests = teacherArchiveView === 'archived' ? archivedTests : activeTests;
     const activeScopeClassViewId = teacherArchiveView === 'archived' ? teacherArchivedClassViewId : teacherActiveClassViewId;
@@ -1143,6 +1147,103 @@
     const archivedClassCards = scopeClassCards;
     const selectedScopeClassCard = scopeClassCards.find(function(card){ return String(card.id) === String(activeScopeClassViewId); }) || null;
     const selectedArchivedClassCard = selectedScopeClassCard;
+
+    function renderTeacherSetCard(){
+      return e('section', { className: 'task-section-card teacher-set-card' },
+        e('div', { className: 'task-section-heading' },
+          e('div', { 'data-title-icon': 'assign' },
+            e('h2', null, 'まとめ配布を作成'),
+            e('p', { className: 'section-note' }, '複数のテストを1つの学習メニューとして配布します。')
+          ),
+          e('span', { className: 'task-chip task-chip-muted' }, testSets.filter(function(s){ return !s.archived; }).length + '件')
+        ),
+        e('div', { className: 'task-form-stack teacher-set-form' },
+          e('input', { value: setName, onChange: function(ev){ setSetName(ev.target.value); }, placeholder: '例: 1学期まとめ', 'aria-label': 'まとめ配布名' }),
+          e('textarea', { value: setDescription, onChange: function(ev){ setSetDescription(ev.target.value); }, rows: 2, maxLength: 1000, placeholder: '説明（任意）', 'aria-label': 'まとめ配布説明' }),
+          e('label', { className: 'task-toggle' }, e('input', { type: 'checkbox', checked: setPublic, onChange: function(ev){ setSetPublic(!!ev.target.checked); } }), e('span', null, '公開する')),
+          e('div', { className: 'teacher-set-pickers' },
+            e('div', { className: 'teacher-set-picker' },
+              e('div', { className: 'teacher-set-picker__header' },
+                e('strong', null, '配布先クラス'),
+                classes.length ? e('span', { className: 'section-note' }, setClassIds.length ? (setClassIds.length + '件選択中') : '未選択') : null
+              ),
+              classes.length
+                ? e('div', { className: 'teacher-set-choice-grid', role: 'group', 'aria-label': '配布先クラス' }, classes.map(function(c){
+                    const checked = setClassIds.indexOf(String(c.id)) !== -1;
+                    return e('button', {
+                      key: c.id,
+                      type: 'button',
+                      className: checked ? 'teacher-set-choice-button is-selected' : 'teacher-set-choice-button',
+                      onClick: function(){ toggleSetClassId(c.id); },
+                      'aria-pressed': checked
+                    },
+                      e('span', { className: 'teacher-set-choice-button__title' }, c.name),
+                      e('span', { className: 'teacher-set-choice-button__meta' }, checked ? '選択中' : '押して追加')
+                    );
+                  }))
+                : e('p', { className: 'section-note' }, '先にクラスを作成してください。')
+            ),
+            e('div', { className: 'teacher-set-picker' },
+              e('div', { className: 'teacher-set-picker__header' },
+                e('strong', null, '含めるテスト'),
+                e('span', { className: 'section-note' }, setTestIds.length ? (setTestIds.length + '件選択中') : '未選択')
+              ),
+              e('div', { className: 'teacher-set-tabs', role: 'tablist', 'aria-label': '含めるテストの表示切替' },
+                e('button', {
+                  type: 'button',
+                  role: 'tab',
+                  className: setTestSourceTab === 'public' ? 'mode-tab is-active' : 'mode-tab',
+                  onClick: function(){ setSetTestSourceTab('public'); },
+                  'aria-selected': setTestSourceTab === 'public'
+                }, '公開中'),
+                e('button', {
+                  type: 'button',
+                  role: 'tab',
+                  className: setTestSourceTab === 'archived' ? 'mode-tab is-active' : 'mode-tab',
+                  onClick: function(){ setSetTestSourceTab('archived'); },
+                  'aria-selected': setTestSourceTab === 'archived'
+                }, 'アーカイブ済み')
+              ),
+              visibleSetCandidateTests.length
+                ? e('div', { className: 'teacher-set-choice-grid teacher-set-choice-grid--tests' }, visibleSetCandidateTests.map(function(t){
+                    const checked = setTestIds.indexOf(String(t.id)) !== -1;
+                    return e('button', {
+                      key: t.id,
+                      type: 'button',
+                      className: checked ? 'teacher-set-choice-button is-selected' : 'teacher-set-choice-button',
+                      onClick: function(){ toggleSetTestId(t.id); },
+                      'aria-pressed': checked
+                    },
+                      e('span', { className: 'teacher-set-choice-button__title' }, t.name),
+                      e('span', { className: 'teacher-set-choice-button__meta' }, getAssignmentLabel(t, classes) + ' / ' + (testQuestionCounts[t.id] || 0) + '問'),
+                      e('span', { className: 'teacher-set-choice-button__badges' },
+                        setTestSourceTab === 'archived'
+                          ? e('span', { className: 'badge badge-muted' }, 'アーカイブ済み')
+                          : e('span', { className: 'badge badge-success' }, '公開中')
+                      )
+                    );
+                  }))
+                : e('p', { className: 'section-note' }, setTestSourceTab === 'archived' ? 'アーカイブ済みテストはありません。' : '公開中のテストはありません。')
+            )
+          ),
+          e('button', { onClick: createTestSet, className: 'btn btn-primary', type: 'button' }, 'まとめ配布を作成')
+        ),
+        testSets.length ? e('div', { className: 'teacher-set-list' }, testSets.filter(function(s){ return !s.archived; }).map(function(s){
+          return e('article', { key: s.id, className: 'teacher-set-row' },
+            e('div', null,
+              e('strong', null, s.name),
+              e('p', { className: 'section-note' }, getSetAssignmentLabel(s, classes) + ' / ' + ((s.items || []).length) + 'テスト')
+            ),
+            e('div', { className: 'teacher-set-row__actions' },
+              e('button', { className: 'btn btn-small btn-ghost', type: 'button', onClick: function(){ toggleTestSetPublic(s); } }, s.public ? '下書きへ' : '公開'),
+              e('button', { className: 'btn btn-small btn-secondary', type: 'button', onClick: function(){ openSetQrShareModal(s); }, disabled: !s.public || !getSetClassIds(s).length }, '共有QR'),
+              e('button', { className: 'btn btn-small btn-ghost', type: 'button', onClick: function(){ archiveTestSet(s); } }, 'アーカイブ'),
+              e('button', { className: 'btn btn-small btn-ghost', type: 'button', onClick: function(){ deleteTestSet(s); } }, '削除')
+            )
+          );
+        })) : e('div', { className: 'task-empty' }, 'まとめ配布はまだありません')
+      );
+    }
     const publicTestsCount = tests.filter(function(t){ return !!t.public; }).length;
     const draftTestsCount = tests.filter(function(t){ return !t.public; }).length;
     const assignedTestsCount = tests.filter(function(t){ return getTestClassIds(t).length > 0; }).length;
@@ -1489,7 +1590,8 @@
                 ) : null
               );
             })) : e('div', { className: 'task-empty' }, teacherTestQuery ? '条件に一致するテストがありません' : (teacherArchiveView === 'archived' ? 'このクラスのアーカイブ済みテストはありません' : 'このクラスの運用中テストはありません'))
-          )
+          ),
+          renderTeacherSetCard()
         ),
         e('aside', { className: 'teacher-workspace-side' },
           e('section', { className: 'task-section-card teacher-create-card' },
@@ -1514,58 +1616,6 @@
                 e('span', { className: 'teacher-inline-note' }, '作成後に問題を編集できます。')
               )
             )
-          ),
-          e('section', { className: 'task-section-card teacher-set-card' },
-            e('div', { className: 'task-section-heading' },
-              e('div', { 'data-title-icon': 'assign' },
-                e('h2', null, 'まとめ配布を作成'),
-                e('p', { className: 'section-note' }, '複数のテストを1つの学習メニューとして配布します。')
-              ),
-              e('span', { className: 'task-chip task-chip-muted' }, testSets.filter(function(s){ return !s.archived; }).length + '件')
-            ),
-            e('div', { className: 'task-form-stack teacher-set-form' },
-              e('input', { value: setName, onChange: function(ev){ setSetName(ev.target.value); }, placeholder: '例: 1学期まとめ', 'aria-label': 'まとめ配布名' }),
-              e('textarea', { value: setDescription, onChange: function(ev){ setSetDescription(ev.target.value); }, rows: 2, maxLength: 1000, placeholder: '説明（任意）', 'aria-label': 'まとめ配布説明' }),
-              e('label', { className: 'task-toggle' }, e('input', { type: 'checkbox', checked: setPublic, onChange: function(ev){ setSetPublic(!!ev.target.checked); } }), e('span', null, '公開する')),
-              e('div', { className: 'teacher-set-picker' },
-                e('strong', null, '配布先クラス'),
-                classes.length ? classes.map(function(c){
-                  const checked = setClassIds.indexOf(String(c.id)) !== -1;
-                  return e('label', { key: c.id, className: checked ? 'assignment-class-option is-selected' : 'assignment-class-option' },
-                    e('input', { type: 'checkbox', checked: checked, onChange: function(){ toggleSetClassId(c.id); } }),
-                    e('span', { className: 'assignment-class-option__body' }, e('strong', null, c.name))
-                  );
-                }) : e('p', { className: 'section-note' }, '先にクラスを作成してください。')
-              ),
-              e('div', { className: 'teacher-set-picker' },
-                e('strong', null, '含めるテスト'),
-                activeTests.length ? activeTests.map(function(t){
-                  const checked = setTestIds.indexOf(String(t.id)) !== -1;
-                  return e('label', { key: t.id, className: checked ? 'assignment-class-option is-selected' : 'assignment-class-option' },
-                    e('input', { type: 'checkbox', checked: checked, onChange: function(){ toggleSetTestId(t.id); } }),
-                    e('span', { className: 'assignment-class-option__body' },
-                      e('strong', null, t.name),
-                      e('span', null, getAssignmentLabel(t, classes) + ' / ' + (testQuestionCounts[t.id] || 0) + '問')
-                    )
-                  );
-                }) : e('p', { className: 'section-note' }, '利用できるテストがありません。')
-              ),
-              e('button', { onClick: createTestSet, className: 'btn btn-primary', type: 'button' }, 'まとめ配布を作成')
-            ),
-            testSets.length ? e('div', { className: 'teacher-set-list' }, testSets.filter(function(s){ return !s.archived; }).map(function(s){
-              return e('article', { key: s.id, className: 'teacher-set-row' },
-                e('div', null,
-                  e('strong', null, s.name),
-                  e('p', { className: 'section-note' }, getSetAssignmentLabel(s, classes) + ' / ' + ((s.items || []).length) + 'テスト')
-                ),
-                e('div', { className: 'teacher-set-row__actions' },
-                  e('button', { className: 'btn btn-small btn-ghost', type: 'button', onClick: function(){ toggleTestSetPublic(s); } }, s.public ? '下書きへ' : '公開'),
-                  e('button', { className: 'btn btn-small btn-secondary', type: 'button', onClick: function(){ openSetQrShareModal(s); }, disabled: !s.public || !getSetClassIds(s).length }, '共有QR'),
-                  e('button', { className: 'btn btn-small btn-ghost', type: 'button', onClick: function(){ archiveTestSet(s); } }, 'アーカイブ'),
-                  e('button', { className: 'btn btn-small btn-ghost', type: 'button', onClick: function(){ deleteTestSet(s); } }, '削除')
-                )
-              );
-            })) : e('div', { className: 'task-empty' }, 'まとめ配布はまだありません')
           ),
           null && e('section', { className: 'task-section-card' },
             e('div', { className: 'task-section-heading' },

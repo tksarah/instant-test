@@ -1476,6 +1476,11 @@ label{font-size:13px;color:var(--text-muted);font-weight:500}
   order:3;
 }
 
+.teacher-set-card{
+  grid-column:1 / -1;
+  order:4;
+}
+
 .teacher-class-card,
 .teacher-create-card{
   display:grid;
@@ -2273,6 +2278,13 @@ label{font-size:13px;color:var(--text-muted);font-weight:500}
   gap:12px;
 }
 
+.teacher-set-pickers{
+  display:grid;
+  grid-template-columns:repeat(2, minmax(0,1fr));
+  gap:12px;
+  align-items:start;
+}
+
 .teacher-set-picker{
   padding:10px;
   border:1px solid #dbe5ee;
@@ -2280,6 +2292,75 @@ label{font-size:13px;color:var(--text-muted);font-weight:500}
   background:#f8fbfd;
   max-height:240px;
   overflow:auto;
+}
+
+.teacher-set-picker__header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+}
+
+.teacher-set-tabs{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+}
+
+.teacher-set-choice-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit, minmax(170px, 1fr));
+  gap:10px;
+}
+
+.teacher-set-choice-grid--tests{
+  grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.teacher-set-choice-button{
+  display:grid;
+  gap:6px;
+  width:100%;
+  min-height:74px;
+  padding:12px 14px;
+  border:1px solid var(--border-soft);
+  border-radius:10px;
+  background:#fff;
+  color:var(--text-strong);
+  text-align:left;
+  cursor:pointer;
+  transition:background .15s ease,border-color .15s ease,box-shadow .15s ease,transform .15s ease;
+}
+
+.teacher-set-choice-button:hover{
+  border-color:#9fb4c8;
+  background:#fdfefe;
+  transform:translateY(-1px);
+}
+
+.teacher-set-choice-button.is-selected{
+  border-color:var(--color-main);
+  background:#eef6fc;
+  box-shadow:inset 3px 0 0 var(--color-main);
+}
+
+.teacher-set-choice-button__title{
+  font-size:15px;
+  font-weight:700;
+  line-height:1.35;
+  overflow-wrap:anywhere;
+}
+
+.teacher-set-choice-button__meta{
+  color:var(--text-muted);
+  font-size:12px;
+  line-height:1.45;
+}
+
+.teacher-set-choice-button__badges{
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
 }
 
 .teacher-set-row,
@@ -2582,7 +2663,13 @@ kbd{background:#f7f9fb;border:1px solid var(--border-soft);box-shadow:none}
   .student-summary-hero{grid-template-columns:1fr}
   .teacher-class-card,
   .teacher-create-card,
-  .teacher-tests-card{grid-column:1}
+  .teacher-tests-card,
+  .teacher-set-card{grid-column:1}
+  .teacher-class-card{order:1}
+  .teacher-tests-card{order:2}
+  .teacher-set-card{order:3}
+  .teacher-create-card{order:4}
+  .teacher-set-pickers{grid-template-columns:1fr}
   .teacher-step-list,
   .student-preview-banner__stats,
   .student-summary-stats{grid-template-columns:1fr 1fr}

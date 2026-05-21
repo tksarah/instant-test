@@ -68,8 +68,8 @@ function assert(condition, message){
     const classB = (await dbRun('INSERT INTO classes (teacher_id, name) VALUES (?,?)', [teacherId, 'Set Class B ' + unique])).lastID;
     created.classes.push(classA, classB);
 
-    const testA = (await dbRun('INSERT INTO tests (teacher_id, class_id, name, public, randomize, answer_mode) VALUES (?,?,?,?,?,?)', [teacherId, null, 'Set Test A ' + unique, 0, 0, 'deferred_summary'])).lastID;
-    const testB = (await dbRun('INSERT INTO tests (teacher_id, class_id, name, public, randomize, answer_mode) VALUES (?,?,?,?,?,?)', [teacherId, null, 'Set Test B ' + unique, 0, 0, 'deferred_summary'])).lastID;
+    const testA = (await dbRun('INSERT INTO tests (teacher_id, class_id, name, public, randomize, answer_mode, archived) VALUES (?,?,?,?,?,?,?)', [teacherId, null, 'Set Test A ' + unique, 0, 0, 'deferred_summary', 0])).lastID;
+    const testB = (await dbRun('INSERT INTO tests (teacher_id, class_id, name, public, randomize, answer_mode, archived) VALUES (?,?,?,?,?,?,?)', [teacherId, null, 'Set Test B ' + unique, 1, 0, 'deferred_summary', 1])).lastID;
     created.tests.push(testA, testB);
 
     for(const testId of [testA, testB]){
@@ -90,6 +90,7 @@ function assert(condition, message){
     assert(createdSet.status === 200 && createdSet.body && createdSet.body.id, 'set creation failed');
     created.sets.push(createdSet.body.id);
     assert(createdSet.body.items.length === 2, 'set should include two tests');
+    assert(createdSet.body.items.some(item => String(item.id) === String(testB) && item.archived === 1), 'set should keep archived tests as items');
 
     const publicSetsA = await req('GET', '/api/test-sets?class_id=' + encodeURIComponent(classA) + '&public=1');
     assert(publicSetsA.status === 200 && publicSetsA.body.some(s => String(s.id) === String(createdSet.body.id)), 'class A should see set');
@@ -105,8 +106,14 @@ function assert(condition, message){
     assert(examSession.status === 200 && examSession.body && examSession.body.id, 'student should start a set item test even when test is not individually public');
     created.examSessions.push(examSession.body.id);
 
+    const archivedExamSession = await req('POST', '/api/exam-sessions', { student_id: student.body.id, test_id: testB }, { Cookie: studentCookie });
+    assert(archivedExamSession.status === 200 && archivedExamSession.body && archivedExamSession.body.id, 'student should start an archived set item test through the set');
+    created.examSessions.push(archivedExamSession.body.id);
+
     const questions = await req('GET', '/api/exam-sessions/' + encodeURIComponent(examSession.body.id) + '/questions', null, { Cookie: studentCookie });
     assert(questions.status === 200 && Array.isArray(questions.body) && questions.body.length === 1, 'session questions should load');
+    const archivedQuestions = await req('GET', '/api/exam-sessions/' + encodeURIComponent(archivedExamSession.body.id) + '/questions', null, { Cookie: studentCookie });
+    assert(archivedQuestions.status === 200 && Array.isArray(archivedQuestions.body) && archivedQuestions.body.length === 1, 'archived set item session questions should load');
     const submit = await req('POST', '/api/submit-answer', {
       student_id: student.body.id,
       test_id: testA,
