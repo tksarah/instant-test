@@ -410,6 +410,21 @@ function normalizeAnswerMode(value){
   return value === 'immediate_feedback' ? 'immediate_feedback' : 'deferred_summary';
 }
 
+function normalizeTeacherNote(value){
+  if(typeof value !== 'string') return '';
+  return value.slice(0, 1000);
+}
+
+function serializeTestForResponse(row, includeTeacherNote){
+  const normalized = { ...row, answer_mode: normalizeAnswerMode(row && row.answer_mode) };
+  if(includeTeacherNote){
+    normalized.teacher_note = normalizeTeacherNote(row && row.teacher_note);
+  } else {
+    delete normalized.teacher_note;
+  }
+  return normalized;
+}
+
 function shuffleArrayInPlace(arr){
   for(let i = arr.length - 1; i > 0; i--){
     const j = Math.floor(Math.random() * (i + 1));
@@ -1011,15 +1026,16 @@ app.delete('/api/classes/:id', requireTeacher, (req, res) => {
 
 // Tests
 app.post('/api/tests', requireTeacher, (req, res) => {
-  const { class_id, name, description, public: pub, randomize, answer_mode } = req.body;
+  const { class_id, name, description, public: pub, randomize, answer_mode, teacher_note } = req.body;
   const answerMode = normalizeAnswerMode(answer_mode);
+  const teacherNote = normalizeTeacherNote(teacher_note);
   const proceed = () => {
     db.run(
-      'INSERT INTO tests (teacher_id, class_id, name, description, public, randomize, answer_mode) VALUES (?,?,?,?,?,?,?)',
-      [req.teacher.id, class_id||null, name, description||'', pub?1:0, randomize?1:0, answerMode],
+      'INSERT INTO tests (teacher_id, class_id, name, description, teacher_note, public, randomize, answer_mode) VALUES (?,?,?,?,?,?,?,?)',
+      [req.teacher.id, class_id||null, name, description||'', teacherNote, pub?1:0, randomize?1:0, answerMode],
       function(err){
         if(err) return res.status(500).json({ error: err.message });
-        res.json({ id: this.lastID, answer_mode: answerMode });
+        res.json({ id: this.lastID, answer_mode: answerMode, teacher_note: teacherNote });
       }
     );
   };
@@ -1057,14 +1073,14 @@ app.get('/api/tests', (req, res) => {
   sql += ' ORDER BY id DESC';
   db.all(sql, params, (err, rows) => {
     if(err) return res.status(500).json({ error: err.message });
-    res.json((rows || []).map(row => ({ ...row, answer_mode: normalizeAnswerMode(row.answer_mode) })));
+    res.json((rows || []).map(row => serializeTestForResponse(row, !!req.teacher)));
   });
 });
 
-// Update a test (name, description, public, randomize, answer_mode, archived)
+// Update a test (name, description, public, randomize, answer_mode, archived, teacher_note)
 app.put('/api/tests/:id', requireTeacher, (req, res) => {
   const id = req.params.id;
-  const { name, description, public: pub, randomize, answer_mode, class_id, archived } = req.body;
+  const { name, description, public: pub, randomize, answer_mode, class_id, archived, teacher_note } = req.body;
   // Build update dynamically so that if `class_id` is undefined we don't overwrite it
   const fields = ['name=?', 'description=?', 'public=?', 'randomize=?'];
   const vals = [name, description||'', pub?1:0, randomize?1:0];
@@ -1082,13 +1098,17 @@ app.put('/api/tests/:id', requireTeacher, (req, res) => {
         fields.push('archived=?');
         vals.push(archived ? 1 : 0);
       }
+      if(typeof teacher_note !== 'undefined'){
+        fields.push('teacher_note=?');
+        vals.push(normalizeTeacherNote(teacher_note));
+      }
       const updateSql = `UPDATE tests SET ${fields.join(', ')} WHERE id=? AND teacher_id=?`;
       vals.push(id, req.teacher.id);
       db.run(updateSql, vals, function(err){
         if(err) return res.status(500).json({ error: err.message });
         db.get('SELECT * FROM tests WHERE id=? AND teacher_id=?', [id, req.teacher.id], (e, row) => {
           if(e) return res.status(500).json({ error: e.message });
-          res.json({ ...row, answer_mode: normalizeAnswerMode(row && row.answer_mode) });
+          res.json(serializeTestForResponse(row, true));
         });
       });
     };

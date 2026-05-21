@@ -257,6 +257,8 @@
     const [editingTestId, setEditingTestId] = React.useState(null);
     const [editingTestName, setEditingTestName] = React.useState('');
     const [editingTestBusy, setEditingTestBusy] = React.useState(false);
+    const [teacherNoteDrafts, setTeacherNoteDrafts] = React.useState({});
+    const [teacherNoteSavingId, setTeacherNoteSavingId] = React.useState(null);
     const [qrShareModal, setQrShareModal] = React.useState({
       open: false,
       loading: false,
@@ -437,7 +439,7 @@
         window.alert('そのテスト名は既に使われています。別の名前を指定してください');
         return;
       }
-      fetch('/api/tests',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({class_id:selectedClass?selectedClass.id:null, name:testName, public: testPublic, randomize: testRandomize, answer_mode: testAnswerMode})}).then(r=>r.json()).then(n=>{ setTests(prev=>prev.concat({id:n.id, name:testName, class_id:selectedClass?selectedClass.id:null, public: testPublic?1:0, randomize: testRandomize?1:0, answer_mode: n && n.answer_mode ? n.answer_mode : testAnswerMode, archived: 0})); setTestName(''); setTestPublic(false); setTestRandomize(false); setTestAnswerMode('deferred_summary'); });
+      fetch('/api/tests',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({class_id:selectedClass?selectedClass.id:null, name:testName, public: testPublic, randomize: testRandomize, answer_mode: testAnswerMode, teacher_note: ''})}).then(r=>r.json()).then(n=>{ setTests(prev=>prev.concat({id:n.id, name:testName, class_id:selectedClass?selectedClass.id:null, public: testPublic?1:0, randomize: testRandomize?1:0, answer_mode: n && n.answer_mode ? n.answer_mode : testAnswerMode, archived: 0, teacher_note: ''})); setTestName(''); setTestPublic(false); setTestRandomize(false); setTestAnswerMode('deferred_summary'); });
     }
     function startInlineTestRename(t){
       setEditingTestId(t.id);
@@ -689,14 +691,15 @@
         randomize: Object.prototype.hasOwnProperty.call(overrides || {}, 'randomize') ? overrides.randomize : (test.randomize || 0),
         answer_mode: Object.prototype.hasOwnProperty.call(overrides || {}, 'answer_mode') ? overrides.answer_mode : getAnswerModeValue(test),
         class_id: Object.prototype.hasOwnProperty.call(overrides || {}, 'class_id') ? overrides.class_id : (test.class_id || null),
-        archived: Object.prototype.hasOwnProperty.call(overrides || {}, 'archived') ? overrides.archived : (test.archived || 0)
+        archived: Object.prototype.hasOwnProperty.call(overrides || {}, 'archived') ? overrides.archived : (test.archived || 0),
+        teacher_note: Object.prototype.hasOwnProperty.call(overrides || {}, 'teacher_note') ? overrides.teacher_note : (test.teacher_note || '')
       };
       return fetch('/api/tests/'+test.id, {
         method: 'PUT',
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify(payload)
       }).then(r=>r.json()).then(updated=>{
-        const merged = Object.assign({}, test, updated, { class_id: payload.class_id, archived: payload.archived, answer_mode: payload.answer_mode });
+        const merged = Object.assign({}, test, updated, { class_id: payload.class_id, archived: payload.archived, answer_mode: payload.answer_mode, teacher_note: payload.teacher_note });
         setTests(prev => prev.map(t => t.id===test.id ? merged : t));
         if(successMessage) setMessage(successMessage);
         return merged;
@@ -735,6 +738,41 @@
           next[testId] = true;
         }
         return next;
+      });
+    }
+
+    function getTeacherNoteDraft(test){
+      if(Object.prototype.hasOwnProperty.call(teacherNoteDrafts, test.id)){
+        return teacherNoteDrafts[test.id];
+      }
+      return test.teacher_note || '';
+    }
+
+    function setTeacherNoteDraft(testId, value){
+      setTeacherNoteDrafts(function(prev){
+        const next = Object.assign({}, prev);
+        next[testId] = String(value || '').slice(0, 1000);
+        return next;
+      });
+    }
+
+    function cancelTeacherNoteEdit(test){
+      setTeacherNoteDrafts(function(prev){
+        const next = Object.assign({}, prev);
+        delete next[test.id];
+        return next;
+      });
+    }
+
+    function saveTeacherNote(test){
+      if(teacherNoteSavingId) return;
+      const nextNote = getTeacherNoteDraft(test);
+      setTeacherNoteSavingId(test.id);
+      updateTestRecord(test, { teacher_note: nextNote }, 'メモの保存に失敗しました', 'メモを保存しました').then(function(updated){
+        setTeacherNoteSavingId(null);
+        if(updated){
+          cancelTeacherNoteEdit(updated);
+        }
       });
     }
 
@@ -920,6 +958,11 @@
               const managementState = getTeacherTestManagementState(t, questionCount);
               const isDetailedCard = teacherTestViewMode === 'detailed' || !!expandedTeacherTests[t.id];
               const isRenamingTest = editingTestId === t.id;
+              const teacherNote = (t.teacher_note || '').trim();
+              const teacherNoteDraft = getTeacherNoteDraft(t);
+              const hasTeacherNoteDraft = Object.prototype.hasOwnProperty.call(teacherNoteDrafts, t.id);
+              const isTeacherNoteDirty = hasTeacherNoteDraft && teacherNoteDraft !== (t.teacher_note || '');
+              const isTeacherNoteSaving = teacherNoteSavingId === t.id;
               return e('article', {
                 key: t.id,
                 draggable: !isRenamingTest,
@@ -971,6 +1014,7 @@
                     )
                   ),
                   e('div', { className: 'task-badges teacher-test-card__badges' },
+                    teacherNote ? e('span', { className: 'badge badge-note' }, 'メモあり') : null,
                     t.archived ? e('span', { className: 'badge badge-muted' }, 'アーカイブ済み') : null,
                     e('span', { className: !!t.public ? 'badge badge-success' : 'badge' }, !!t.public ? '公開中' : '下書き'),
                     e('span', { className: !!t.randomize ? 'badge badge-accent' : 'badge badge-muted' }, !!t.randomize ? 'ランダム' : '固定順'),
@@ -987,6 +1031,7 @@
                     e('strong', { className: 'teacher-test-meta__value' }, questionCount + '問')
                   )
                 ),
+                teacherNote ? e('p', { className: 'teacher-test-note-preview' }, teacherNote) : null,
                 e('div', { className: 'teacher-test-card__primary-actions' },
                   e('a', { href: '/create_test.html?class_id=' + encodeURIComponent(t.class_id || '') + '&name=' + encodeURIComponent(t.name || '') + '&test_id=' + encodeURIComponent(t.id), className: 'btn btn-small btn-primary' }, '問題管理'),
                   e('button', { onClick: function(){ openQrShareModal(t); }, className: 'btn btn-small btn-secondary', type: 'button', disabled: !canShareTest }, '共有 QR'),
@@ -1000,6 +1045,27 @@
                     : null
                 ),
                 isDetailedCard ? e('div', { className: 'teacher-test-card__details' },
+                  e('div', { className: 'teacher-test-note-editor' },
+                    e('div', { className: 'teacher-test-note-editor__header' },
+                      e('label', { htmlFor: 'teacher-note-' + t.id }, '教師メモ'),
+                      e('span', { className: 'teacher-test-note-editor__count' }, String(teacherNoteDraft.length) + '/1000')
+                    ),
+                    e('textarea', {
+                      id: 'teacher-note-' + t.id,
+                      className: 'teacher-test-note-editor__textarea',
+                      value: teacherNoteDraft,
+                      maxLength: 1000,
+                      rows: 3,
+                      placeholder: '準備物、配布タイミング、注意点などを記録',
+                      disabled: isTeacherNoteSaving,
+                      onChange: function(ev){ setTeacherNoteDraft(t.id, ev.target.value); }
+                    }),
+                    e('div', { className: 'teacher-test-note-editor__actions' },
+                      isTeacherNoteDirty ? e('span', { className: 'teacher-test-note-editor__status' }, '未保存の変更があります') : e('span', { className: 'teacher-test-note-editor__status' }, teacherNote ? '保存済みメモ' : 'メモは未記入です'),
+                      e('button', { className: 'btn btn-small btn-primary', type: 'button', onClick: function(){ saveTeacherNote(t); }, disabled: isTeacherNoteSaving || !isTeacherNoteDirty }, isTeacherNoteSaving ? '保存中...' : '保存'),
+                      e('button', { className: 'btn btn-small btn-ghost', type: 'button', onClick: function(){ cancelTeacherNoteEdit(t); }, disabled: isTeacherNoteSaving || !isTeacherNoteDirty }, 'キャンセル')
+                    )
+                  ),
                   e('div', { className: 'task-card-controls teacher-test-card__controls' },
                     e('label', { className: 'task-toggle compact' }, e('input', { type: 'checkbox', checked: !!t.public, onChange: function(){ toggleTestPublic(t); }, disabled: !!t.archived }), e('span', null, '公開')),
                     e('label', { className: 'task-toggle compact' }, e('input', { type: 'checkbox', checked: !!t.randomize, onChange: function(){ updateTestRecord(t, { randomize: t.randomize ? 0 : 1 }, 'ランダム設定更新エラー'); } }), e('span', null, 'ランダム')),

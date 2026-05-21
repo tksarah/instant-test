@@ -1676,6 +1676,7 @@ label{font-size:13px;color:var(--text-muted);font-weight:500}
 .badge-success{background:#eff6f1;color:var(--correct);border-color:#cedfd4}
 .badge-accent{background:#eef3f8;color:var(--color-accent-strong);border-color:#d6e0ea}
 .badge-muted,.task-chip-muted,.student-pill-muted{background:#f5f7fa;color:var(--text-muted)}
+.badge-note{background:#f8f3e8;color:#6b5422;border-color:#e4d7b8}
 .student-pill-soft{background:#f3efe7;color:#7a6747;border-color:#e1d8c6}
 
 .task-card,
@@ -1796,6 +1797,21 @@ label{font-size:13px;color:var(--text-muted);font-weight:500}
   gap:10px;
 }
 
+.teacher-test-note-preview{
+  display:-webkit-box;
+  -webkit-line-clamp:2;
+  -webkit-box-orient:vertical;
+  overflow:hidden;
+  margin:0;
+  padding:8px 10px;
+  border:1px solid #e4d7b8;
+  border-radius:6px;
+  background:#fbf8f0;
+  color:#5d4b24;
+  font-size:12px;
+  line-height:1.5;
+}
+
 .teacher-test-meta{
   display:grid;
   gap:4px;
@@ -1829,6 +1845,45 @@ label{font-size:13px;color:var(--text-muted);font-weight:500}
   gap:10px;
   padding-top:12px;
   border-top:1px solid var(--border-soft);
+}
+
+.teacher-test-note-editor{
+  display:grid;
+  gap:8px;
+  padding:10px;
+  border:1px solid var(--border-soft);
+  border-radius:6px;
+  background:var(--bg-soft);
+}
+
+.teacher-test-note-editor__header,
+.teacher-test-note-editor__actions{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  flex-wrap:wrap;
+}
+
+.teacher-test-note-editor__count,
+.teacher-test-note-editor__status{
+  font-size:12px;
+  color:var(--text-muted);
+}
+
+.teacher-test-note-editor__textarea{
+  min-height:76px;
+  resize:vertical;
+  font-size:13px;
+  line-height:1.5;
+}
+
+.teacher-test-note-editor__actions{
+  justify-content:flex-end;
+}
+
+.teacher-test-note-editor__status{
+  margin-right:auto;
 }
 
 .teacher-test-card__controls{

@@ -46,6 +46,7 @@ db.serialize(() => {
     class_id INTEGER,
     name TEXT,
     description TEXT,
+    teacher_note TEXT DEFAULT '',
     public INTEGER DEFAULT 0,
     randomize INTEGER DEFAULT 0,
     answer_mode TEXT DEFAULT 'deferred_summary',
@@ -67,6 +68,13 @@ db.serialize(() => {
       db.run('ALTER TABLE tests ADD COLUMN archived INTEGER DEFAULT 0', (e) => {
         if(e){ console.error('Failed to add archived column to tests:', e.message); }
         else { console.log('Added archived column to tests'); }
+      });
+    }
+    const hasTeacherNote = rows && rows.some(r => r.name === 'teacher_note');
+    if(!hasTeacherNote){
+      db.run("ALTER TABLE tests ADD COLUMN teacher_note TEXT DEFAULT ''", (e) => {
+        if(e){ console.error('Failed to add teacher_note column to tests:', e.message); }
+        else { console.log('Added teacher_note column to tests'); }
       });
     }
     const hasAnswerMode = rows && rows.some(r => r.name === 'answer_mode');
