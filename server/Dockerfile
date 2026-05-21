@@ -6,7 +6,11 @@ RUN apt-get update && \
 
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --only=production --build-from-source
+RUN if [ -f package-lock.json ]; then \
+      npm ci --omit=dev --build-from-source; \
+    else \
+      npm install --omit=dev --build-from-source; \
+    fi
 
 COPY . .
 EXPOSE 3000
