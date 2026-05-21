@@ -66,6 +66,40 @@ db.serialize(() => {
   db.run(`INSERT OR IGNORE INTO test_classes (test_id, class_id)
     SELECT id, class_id FROM tests WHERE class_id IS NOT NULL`);
 
+  db.run(`CREATE TABLE IF NOT EXISTS test_sets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    teacher_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    public INTEGER DEFAULT 0,
+    archived INTEGER DEFAULT 0,
+    created_at TEXT,
+    updated_at TEXT,
+    FOREIGN KEY(teacher_id) REFERENCES teachers(id)
+  );`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS test_set_items (
+    set_id INTEGER NOT NULL,
+    test_id INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    PRIMARY KEY(set_id, test_id),
+    FOREIGN KEY(set_id) REFERENCES test_sets(id),
+    FOREIGN KEY(test_id) REFERENCES tests(id)
+  );`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS test_set_classes (
+    set_id INTEGER NOT NULL,
+    class_id INTEGER NOT NULL,
+    PRIMARY KEY(set_id, class_id),
+    FOREIGN KEY(set_id) REFERENCES test_sets(id),
+    FOREIGN KEY(class_id) REFERENCES classes(id)
+  );`);
+
+  db.run('CREATE INDEX IF NOT EXISTS idx_test_set_items_set ON test_set_items(set_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_test_set_items_test ON test_set_items(test_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_test_set_classes_class ON test_set_classes(class_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_test_set_classes_set ON test_set_classes(set_id)');
+
   // Ensure existing DB has 'teacher_id' column in tests
   db.all("PRAGMA table_info('tests')", (err, rows) => {
     if(err) return;

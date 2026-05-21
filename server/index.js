@@ -288,6 +288,9 @@ async function deleteTeacherCascade(teacherId){
     await dbRunAsync('DELETE FROM exam_sessions WHERE test_id IN (SELECT id FROM tests WHERE teacher_id=?) OR student_id IN (SELECT id FROM students WHERE class_id IN (SELECT id FROM classes WHERE teacher_id=?))', [id, id]);
     await dbRunAsync('DELETE FROM choices WHERE question_id IN (SELECT id FROM questions WHERE test_id IN (SELECT id FROM tests WHERE teacher_id=?))', [id]);
     await dbRunAsync('DELETE FROM questions WHERE test_id IN (SELECT id FROM tests WHERE teacher_id=?)', [id]);
+    await dbRunAsync('DELETE FROM test_set_items WHERE set_id IN (SELECT id FROM test_sets WHERE teacher_id=?) OR test_id IN (SELECT id FROM tests WHERE teacher_id=?)', [id, id]);
+    await dbRunAsync('DELETE FROM test_set_classes WHERE set_id IN (SELECT id FROM test_sets WHERE teacher_id=?) OR class_id IN (SELECT id FROM classes WHERE teacher_id=?)', [id, id]);
+    await dbRunAsync('DELETE FROM test_sets WHERE teacher_id=?', [id]);
     await dbRunAsync('DELETE FROM test_classes WHERE test_id IN (SELECT id FROM tests WHERE teacher_id=?) OR class_id IN (SELECT id FROM classes WHERE teacher_id=?)', [id, id]);
     await dbRunAsync('DELETE FROM tests WHERE teacher_id=?', [id]);
     await dbRunAsync('DELETE FROM students WHERE class_id IN (SELECT id FROM classes WHERE teacher_id=?)', [id]);
@@ -441,6 +444,21 @@ async function ensureTeacherOwnsClassesAsync(teacherId, classIds){
   }
 }
 
+async function ensureTeacherOwnsTestsAsync(teacherId, testIds){
+  const ids = Array.isArray(testIds) ? testIds : [];
+  if(ids.length === 0) return;
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = await dbAllAsync(
+    `SELECT id FROM tests WHERE teacher_id=? AND id IN (${placeholders})`,
+    [teacherId].concat(ids)
+  );
+  if(rows.length !== ids.length){
+    const err = new Error('test_not_found');
+    err.statusCode = 404;
+    throw err;
+  }
+}
+
 async function replaceTestClasses(testId, classIds){
   const ids = Array.isArray(classIds) ? classIds : [];
   await dbRunAsync('DELETE FROM test_classes WHERE test_id=?', [testId]);
@@ -479,17 +497,162 @@ async function hydrateTestsForResponse(rows, includeTeacherNote){
   });
 }
 
+function normalizeTestSetName(value){
+  return String(value || '').trim().slice(0, 80);
+}
+
+function normalizeTestSetDescription(value){
+  return String(value || '').trim().slice(0, 1000);
+}
+
+function normalizeIds(source){
+  const values = Array.isArray(source) ? source : [];
+  return Array.from(new Set(values.map(value => parseInt(value, 10)).filter(value => Number.isInteger(value) && value > 0)));
+}
+
+async function replaceTestSetClasses(setId, classIds){
+  await dbRunAsync('DELETE FROM test_set_classes WHERE set_id=?', [setId]);
+  for(const classId of classIds){
+    await dbRunAsync('INSERT OR IGNORE INTO test_set_classes (set_id, class_id) VALUES (?,?)', [setId, classId]);
+  }
+}
+
+async function replaceTestSetItems(setId, testIds){
+  await dbRunAsync('DELETE FROM test_set_items WHERE set_id=?', [setId]);
+  for(let i = 0; i < testIds.length; i++){
+    await dbRunAsync('INSERT OR IGNORE INTO test_set_items (set_id, test_id, position) VALUES (?,?,?)', [setId, testIds[i], i + 1]);
+  }
+}
+
+async function getTestSetClasses(setIds){
+  if(!setIds.length) return {};
+  const placeholders = setIds.map(() => '?').join(',');
+  const rows = await dbAllAsync(
+    `SELECT tsc.set_id, c.id, c.name
+     FROM test_set_classes tsc
+     JOIN classes c ON c.id=tsc.class_id
+     WHERE tsc.set_id IN (${placeholders})
+     ORDER BY c.name ASC, c.id ASC`,
+    setIds
+  );
+  const bySet = {};
+  rows.forEach(row => {
+    bySet[row.set_id] = bySet[row.set_id] || [];
+    bySet[row.set_id].push({ id: row.id, name: row.name });
+  });
+  return bySet;
+}
+
+async function getTestSetItems(setIds, studentId){
+  if(!setIds.length) return {};
+  const placeholders = setIds.map(() => '?').join(',');
+  const rows = await dbAllAsync(
+    `SELECT tsi.set_id, tsi.position, t.id, t.name, t.description, t.public, t.randomize, t.answer_mode, t.archived,
+            COUNT(q.id) AS question_count
+     FROM test_set_items tsi
+     JOIN tests t ON t.id=tsi.test_id
+     LEFT JOIN questions q ON q.test_id=t.id
+     WHERE tsi.set_id IN (${placeholders})
+       AND (t.archived IS NULL OR t.archived=0)
+     GROUP BY tsi.set_id, tsi.position, t.id
+     ORDER BY tsi.set_id ASC, tsi.position ASC`,
+    setIds
+  );
+  let sessionsByTest = {};
+  if(studentId && rows.length){
+    const testIds = Array.from(new Set(rows.map(row => row.id)));
+    const testPlaceholders = testIds.map(() => '?').join(',');
+    const sessions = await dbAllAsync(
+      `SELECT es.*
+       FROM exam_sessions es
+       JOIN (
+         SELECT test_id, MAX(id) AS id
+         FROM exam_sessions
+         WHERE student_id=? AND test_id IN (${testPlaceholders})
+         GROUP BY test_id
+       ) latest ON latest.id=es.id`,
+      [studentId].concat(testIds)
+    );
+    sessions.forEach(session => {
+      sessionsByTest[session.test_id] = session;
+    });
+  }
+  const bySet = {};
+  rows.forEach(row => {
+    const session = sessionsByTest[row.id] || null;
+    bySet[row.set_id] = bySet[row.set_id] || [];
+    bySet[row.set_id].push({
+      id: row.id,
+      name: row.name,
+      description: row.description || '',
+      public: row.public ? 1 : 0,
+      randomize: row.randomize ? 1 : 0,
+      answer_mode: normalizeAnswerMode(row.answer_mode),
+      question_count: row.question_count || 0,
+      position: row.position,
+      latest_session: session ? {
+        id: session.id,
+        status: session.status,
+        score: session.score || 0,
+        max_score: session.max_score || 0,
+        percent: session.percent || 0,
+        finished_at: session.finished_at,
+        started_at: session.started_at
+      } : null
+    });
+  });
+  return bySet;
+}
+
+async function hydrateTestSetsForResponse(rows, options){
+  const sets = (rows || []).map(row => ({
+    id: row.id,
+    teacher_id: row.teacher_id,
+    name: row.name,
+    description: row.description || '',
+    public: row.public ? 1 : 0,
+    archived: row.archived ? 1 : 0,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    class_ids: [],
+    assigned_classes: [],
+    items: []
+  }));
+  if(!sets.length) return sets;
+  const ids = sets.map(row => row.id);
+  const classesBySet = await getTestSetClasses(ids);
+  const itemsBySet = await getTestSetItems(ids, options && options.studentId);
+  return sets.map(set => {
+    const assigned = classesBySet[set.id] || [];
+    return Object.assign({}, set, {
+      class_ids: assigned.map(row => row.id),
+      assigned_classes: assigned,
+      items: itemsBySet[set.id] || []
+    });
+  });
+}
+
 async function studentCanAccessTest(studentClassId, testId){
   const row = await dbGetAsync(
     `SELECT 1 AS ok
-     FROM test_classes
-     WHERE test_id=? AND class_id=?
+     FROM test_classes tc
+     JOIN tests t_direct ON t_direct.id=tc.test_id
+     WHERE tc.test_id=? AND tc.class_id=? AND t_direct.public=1 AND (t_direct.archived IS NULL OR t_direct.archived=0)
      UNION
      SELECT 1 AS ok
      FROM tests
-     WHERE id=? AND class_id=?
+     WHERE id=? AND class_id=? AND public=1 AND (archived IS NULL OR archived=0)
+     UNION
+     SELECT 1 AS ok
+     FROM test_set_items tsi
+     JOIN test_sets ts ON ts.id=tsi.set_id
+     JOIN test_set_classes tsc ON tsc.set_id=ts.id
+     WHERE tsi.test_id=?
+       AND tsc.class_id=?
+       AND ts.public=1
+       AND (ts.archived IS NULL OR ts.archived=0)
      LIMIT 1`,
-    [testId, studentClassId, testId, studentClassId]
+    [testId, studentClassId, testId, studentClassId, testId, studentClassId]
   );
   return !!row;
 }
@@ -795,7 +958,7 @@ function authorizeStudentTestAccess(req, res, testId, studentId, cb){
         return cb({ studentId: requestedStudentId, test: ownedTest, actor: 'teacher' });
       }
 
-      const test = await dbGetAsync('SELECT id, class_id, public, randomize, answer_mode FROM tests WHERE id=? AND public=1', [requestedTestId]);
+      const test = await dbGetAsync('SELECT id, class_id, public, randomize, answer_mode FROM tests WHERE id=? AND (archived IS NULL OR archived=0)', [requestedTestId]);
       if(!test) return res.status(404).json({ error: 'not_found' });
       if(!req.student) return res.status(401).json({ error: 'unauthorized' });
       if(req.student.id !== requestedStudentId) return res.status(403).json({ error: 'forbidden' });
@@ -1034,6 +1197,13 @@ app.get('/api/classes', (req, res) => {
        WHERE t.public=1
          AND (t.archived IS NULL OR t.archived=0)
          AND (tc.class_id=c.id OR t.class_id=c.id)
+       UNION
+       SELECT 1
+       FROM test_sets ts
+       JOIN test_set_classes tsc ON tsc.set_id=ts.id
+       WHERE ts.public=1
+         AND (ts.archived IS NULL OR ts.archived=0)
+         AND tsc.class_id=c.id
      )
      ORDER BY c.name ASC`,
     (err, rows) => {
@@ -1093,11 +1263,14 @@ app.delete('/api/classes/:id', requireTeacher, (req, res) => {
                       if(err6) return res.status(500).json({ error: err6.message });
                       db.run('DELETE FROM students WHERE class_id=?', [id], function(err7){
                         if(err7) return res.status(500).json({ error: err7.message });
-                        db.run('DELETE FROM test_classes WHERE class_id=?', [id], function(unlinkErr){
-                          if(unlinkErr) return res.status(500).json({ error: unlinkErr.message });
-                          db.run('DELETE FROM classes WHERE id=? AND teacher_id=?', [id, req.teacher.id], function(err8){
-                            if(err8) return res.status(500).json({ error: err8.message });
-                            res.json({ id: Number(id), deleted: true, cascade: true });
+                        db.run('DELETE FROM test_set_classes WHERE class_id=?', [id], function(setClassErr){
+                          if(setClassErr) return res.status(500).json({ error: setClassErr.message });
+                          db.run('DELETE FROM test_classes WHERE class_id=?', [id], function(unlinkErr){
+                            if(unlinkErr) return res.status(500).json({ error: unlinkErr.message });
+                            db.run('DELETE FROM classes WHERE id=? AND teacher_id=?', [id, req.teacher.id], function(err8){
+                              if(err8) return res.status(500).json({ error: err8.message });
+                              res.json({ id: Number(id), deleted: true, cascade: true });
+                            });
                           });
                         });
                       });
@@ -1111,11 +1284,14 @@ app.delete('/api/classes/:id', requireTeacher, (req, res) => {
           // no dependencies - safe to delete
           db.run('DELETE FROM classes WHERE id=? AND teacher_id=?', [id, req.teacher.id], function(err2){
             if(err2) return res.status(500).json({ error: err2.message });
-            db.run('DELETE FROM test_classes WHERE class_id=?', [id], function(unlinkErr){
-              if(unlinkErr) return res.status(500).json({ error: unlinkErr.message });
-              db.run('UPDATE tests SET class_id=NULL WHERE class_id=? AND teacher_id=?', [id, req.teacher.id], function(err3){
-                if(err3) return res.status(500).json({ error: err3.message });
-                res.json({ id: id, deleted: true });
+            db.run('DELETE FROM test_set_classes WHERE class_id=?', [id], function(setClassErr){
+              if(setClassErr) return res.status(500).json({ error: setClassErr.message });
+              db.run('DELETE FROM test_classes WHERE class_id=?', [id], function(unlinkErr){
+                if(unlinkErr) return res.status(500).json({ error: unlinkErr.message });
+                db.run('UPDATE tests SET class_id=NULL WHERE class_id=? AND teacher_id=?', [id, req.teacher.id], function(err3){
+                  if(err3) return res.status(500).json({ error: err3.message });
+                  res.json({ id: id, deleted: true });
+                });
               });
             });
           });
@@ -1123,6 +1299,277 @@ app.delete('/api/classes/:id', requireTeacher, (req, res) => {
       }
     );
   });
+});
+
+// Test sets
+app.get('/api/test-sets', (req, res) => {
+  const { class_id, public: pub, archived, include_archived } = req.query;
+  const wantsArchivedOnly = archived === '1' || archived === 1;
+  const wantsIncludeArchived = include_archived === '1' || include_archived === 1;
+  let sql = 'SELECT DISTINCT ts.* FROM test_sets ts';
+  const params = [];
+  const conditions = [];
+
+  if(req.teacher){
+    conditions.push('ts.teacher_id=?');
+    params.push(req.teacher.id);
+    if(class_id){
+      sql += ' LEFT JOIN test_set_classes tsc_filter ON tsc_filter.set_id=ts.id';
+      conditions.push('tsc_filter.class_id=?');
+      params.push(class_id);
+    }
+    if(typeof pub !== 'undefined'){
+      conditions.push('ts.public=?');
+      params.push(pub == 1 || pub === '1' ? 1 : 0);
+    }
+    if(wantsArchivedOnly){
+      conditions.push('ts.archived=1');
+    } else if(!wantsIncludeArchived){
+      conditions.push('(ts.archived IS NULL OR ts.archived=0)');
+    }
+  } else {
+    conditions.push('ts.public=1');
+    conditions.push('(ts.archived IS NULL OR ts.archived=0)');
+    if(class_id){
+      sql += ' JOIN test_set_classes tsc_filter ON tsc_filter.set_id=ts.id';
+      conditions.push('tsc_filter.class_id=?');
+      params.push(class_id);
+    }
+  }
+
+  if(conditions.length) sql += ' WHERE ' + conditions.join(' AND ');
+  sql += ' ORDER BY ts.id DESC';
+  db.all(sql, params, async (err, rows) => {
+    if(err) return res.status(500).json({ error: err.message });
+    try{
+      res.json(await hydrateTestSetsForResponse(rows || [], { studentId: req.student && req.student.id }));
+    }catch(hydrateErr){
+      res.status(500).json({ error: hydrateErr.message });
+    }
+  });
+});
+
+app.get('/api/test-sets/:id', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if(!id) return res.status(400).json({ error: 'invalid_set_id' });
+  const sql = req.teacher
+    ? 'SELECT * FROM test_sets WHERE id=? AND teacher_id=?'
+    : 'SELECT * FROM test_sets WHERE id=? AND public=1 AND (archived IS NULL OR archived=0)';
+  const params = req.teacher ? [id, req.teacher.id] : [id];
+  db.get(sql, params, async (err, row) => {
+    if(err) return res.status(500).json({ error: err.message });
+    if(!row) return res.status(404).json({ error: 'not_found' });
+    try{
+      const hydrated = await hydrateTestSetsForResponse([row], { studentId: req.student && req.student.id });
+      const set = hydrated[0];
+      if(!req.teacher){
+        const classId = req.student ? req.student.class_id : parseInt(req.query.class_id, 10);
+        if(!classId || set.class_ids.map(String).indexOf(String(classId)) === -1){
+          return res.status(403).json({ error: 'forbidden' });
+        }
+      }
+      res.json(set);
+    }catch(hydrateErr){
+      res.status(500).json({ error: hydrateErr.message });
+    }
+  });
+});
+
+app.post('/api/test-sets', requireTeacher, async (req, res) => {
+  const name = normalizeTestSetName(req.body && req.body.name);
+  if(!name) return res.status(400).json({ error: 'name required' });
+  const description = normalizeTestSetDescription(req.body && req.body.description);
+  const classIds = normalizeIds(req.body && req.body.class_ids);
+  const testIds = normalizeIds(req.body && req.body.test_ids);
+  const nowIso = new Date().toISOString();
+  try{
+    await ensureTeacherOwnsClassesAsync(req.teacher.id, classIds);
+    await ensureTeacherOwnsTestsAsync(req.teacher.id, testIds);
+    await dbRunAsync('BEGIN IMMEDIATE TRANSACTION');
+    const inserted = await dbRunAsync(
+      'INSERT INTO test_sets (teacher_id, name, description, public, archived, created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
+      [req.teacher.id, name, description, req.body && req.body.public ? 1 : 0, req.body && req.body.archived ? 1 : 0, nowIso, nowIso]
+    );
+    await replaceTestSetClasses(inserted.lastID, classIds);
+    await replaceTestSetItems(inserted.lastID, testIds);
+    await dbRunAsync('COMMIT');
+    const row = await dbGetAsync('SELECT * FROM test_sets WHERE id=? AND teacher_id=?', [inserted.lastID, req.teacher.id]);
+    const hydrated = await hydrateTestSetsForResponse([row], {});
+    res.json(hydrated[0]);
+  }catch(err){
+    try{ await dbRunAsync('ROLLBACK'); }catch(_rollbackErr){}
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+app.put('/api/test-sets/:id', requireTeacher, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if(!id) return res.status(400).json({ error: 'invalid_set_id' });
+  const current = await dbGetAsync('SELECT * FROM test_sets WHERE id=? AND teacher_id=?', [id, req.teacher.id]).catch(err => {
+    res.status(500).json({ error: err.message });
+    return null;
+  });
+  if(!current) return;
+  const name = Object.prototype.hasOwnProperty.call(req.body || {}, 'name') ? normalizeTestSetName(req.body.name) : current.name;
+  if(!name) return res.status(400).json({ error: 'name required' });
+  const description = Object.prototype.hasOwnProperty.call(req.body || {}, 'description') ? normalizeTestSetDescription(req.body.description) : current.description || '';
+  const shouldUpdateClasses = Object.prototype.hasOwnProperty.call(req.body || {}, 'class_ids');
+  const shouldUpdateItems = Object.prototype.hasOwnProperty.call(req.body || {}, 'test_ids');
+  const classIds = shouldUpdateClasses ? normalizeIds(req.body.class_ids) : null;
+  const testIds = shouldUpdateItems ? normalizeIds(req.body.test_ids) : null;
+  const nowIso = new Date().toISOString();
+  try{
+    if(shouldUpdateClasses) await ensureTeacherOwnsClassesAsync(req.teacher.id, classIds);
+    if(shouldUpdateItems) await ensureTeacherOwnsTestsAsync(req.teacher.id, testIds);
+    await dbRunAsync('BEGIN IMMEDIATE TRANSACTION');
+    await dbRunAsync(
+      'UPDATE test_sets SET name=?, description=?, public=?, archived=?, updated_at=? WHERE id=? AND teacher_id=?',
+      [
+        name,
+        description,
+        Object.prototype.hasOwnProperty.call(req.body || {}, 'public') ? (req.body.public ? 1 : 0) : (current.public ? 1 : 0),
+        Object.prototype.hasOwnProperty.call(req.body || {}, 'archived') ? (req.body.archived ? 1 : 0) : (current.archived ? 1 : 0),
+        nowIso,
+        id,
+        req.teacher.id
+      ]
+    );
+    if(shouldUpdateClasses) await replaceTestSetClasses(id, classIds);
+    if(shouldUpdateItems) await replaceTestSetItems(id, testIds);
+    await dbRunAsync('COMMIT');
+    const row = await dbGetAsync('SELECT * FROM test_sets WHERE id=? AND teacher_id=?', [id, req.teacher.id]);
+    const hydrated = await hydrateTestSetsForResponse([row], {});
+    res.json(hydrated[0]);
+  }catch(err){
+    try{ await dbRunAsync('ROLLBACK'); }catch(_rollbackErr){}
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/test-sets/:id', requireTeacher, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if(!id) return res.status(400).json({ error: 'invalid_set_id' });
+  try{
+    const row = await dbGetAsync('SELECT id FROM test_sets WHERE id=? AND teacher_id=?', [id, req.teacher.id]);
+    if(!row) return res.status(404).json({ error: 'not_found' });
+    await dbRunAsync('BEGIN IMMEDIATE TRANSACTION');
+    await dbRunAsync('DELETE FROM test_set_items WHERE set_id=?', [id]);
+    await dbRunAsync('DELETE FROM test_set_classes WHERE set_id=?', [id]);
+    await dbRunAsync('DELETE FROM test_sets WHERE id=? AND teacher_id=?', [id, req.teacher.id]);
+    await dbRunAsync('COMMIT');
+    res.json({ id, deleted: true });
+  }catch(err){
+    try{ await dbRunAsync('ROLLBACK'); }catch(_rollbackErr){}
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/test-sets/:id/summary', requireTeacher, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if(!id) return res.status(400).json({ error: 'invalid_set_id' });
+  try{
+    const row = await dbGetAsync('SELECT * FROM test_sets WHERE id=? AND teacher_id=?', [id, req.teacher.id]);
+    if(!row) return res.status(404).json({ error: 'not_found' });
+    const hydrated = await hydrateTestSetsForResponse([row], {});
+    const set = hydrated[0];
+    const testIds = (set.items || []).map(item => item.id);
+    const classIds = (set.class_ids || []).map(idValue => parseInt(idValue, 10)).filter(Boolean);
+    if(!testIds.length || !classIds.length){
+      return res.json({ set, students: [], totals: { students: 0, completed_tests: 0, possible_tests: 0, score: 0, max_score: 0, percent: 0 } });
+    }
+    const classPlaceholders = classIds.map(() => '?').join(',');
+    const students = await dbAllAsync(
+      `SELECT s.id, s.name, s.class_id, c.name AS className
+       FROM students s
+       LEFT JOIN classes c ON c.id=s.class_id
+       WHERE s.class_id IN (${classPlaceholders})
+       ORDER BY c.name ASC, s.name ASC, s.id ASC`,
+      classIds
+    );
+    const testPlaceholders = testIds.map(() => '?').join(',');
+    const studentIds = students.map(student => student.id);
+    let sessions = [];
+    if(studentIds.length){
+      const studentPlaceholders = studentIds.map(() => '?').join(',');
+      sessions = await dbAllAsync(
+        `SELECT es.*
+         FROM exam_sessions es
+         JOIN (
+           SELECT student_id, test_id, MAX(id) AS id
+           FROM exam_sessions
+           WHERE student_id IN (${studentPlaceholders})
+             AND test_id IN (${testPlaceholders})
+           GROUP BY student_id, test_id
+         ) latest ON latest.id=es.id`,
+        studentIds.concat(testIds)
+      );
+    }
+    const byStudentTest = {};
+    sessions.forEach(session => {
+      byStudentTest[session.student_id + ':' + session.test_id] = session;
+    });
+    let completedTests = 0;
+    let score = 0;
+    let maxScore = 0;
+    const studentRows = students.map(student => {
+      let studentCompleted = 0;
+      let studentInProgress = 0;
+      let studentScore = 0;
+      let studentMax = 0;
+      const testsForStudent = (set.items || []).map(item => {
+        const session = byStudentTest[student.id + ':' + item.id] || null;
+        const completed = !!(session && (session.status === 'completed' || session.finished_at));
+        if(completed){
+          studentCompleted++;
+          completedTests++;
+          studentScore += session.score || 0;
+          studentMax += session.max_score || 0;
+          score += session.score || 0;
+          maxScore += session.max_score || 0;
+        } else if(session) {
+          studentInProgress++;
+        }
+        return {
+          test_id: item.id,
+          test_name: item.name,
+          status: session ? session.status : 'not_started',
+          session_id: session ? session.id : null,
+          score: completed ? (session.score || 0) : 0,
+          max_score: completed ? (session.max_score || 0) : 0,
+          percent: completed ? (session.percent || 0) : 0,
+          finished_at: session ? session.finished_at : null,
+          started_at: session ? session.started_at : null
+        };
+      });
+      return {
+        student_id: student.id,
+        student_name: student.name,
+        class_id: student.class_id,
+        class_name: student.className,
+        completed_tests: studentCompleted,
+        in_progress_tests: studentInProgress,
+        total_tests: testIds.length,
+        score: studentScore,
+        max_score: studentMax,
+        percent: studentMax ? (studentScore / studentMax * 100) : 0,
+        tests: testsForStudent
+      };
+    });
+    res.json({
+      set,
+      students: studentRows,
+      totals: {
+        students: students.length,
+        completed_tests: completedTests,
+        possible_tests: students.length * testIds.length,
+        score,
+        max_score: maxScore,
+        percent: maxScore ? (score / maxScore * 100) : 0
+      }
+    });
+  }catch(err){
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Tests
@@ -1261,12 +1708,15 @@ app.delete('/api/tests/:id', requireTeacher, (req, res) => {
                   if(err4) return res.status(500).json({ error: err4.message });
                   db.run('DELETE FROM questions WHERE test_id=?', [id], function(err5){
                     if(err5) return res.status(500).json({ error: err5.message });
+                    db.run('DELETE FROM test_set_items WHERE test_id=?', [id], function(setItemErr){
+                      if(setItemErr) return res.status(500).json({ error: setItemErr.message });
                     db.run('DELETE FROM test_classes WHERE test_id=?', [id], function(unlinkErr){
                       if(unlinkErr) return res.status(500).json({ error: unlinkErr.message });
                       db.run('DELETE FROM tests WHERE id=? AND teacher_id=?', [id, req.teacher.id], function(err6){
                       if(err6) return res.status(500).json({ error: err6.message });
                       res.json({ id: id, deleted: true, cascade: true });
                       });
+                    });
                     });
                   });
                 });
@@ -1275,12 +1725,15 @@ app.delete('/api/tests/:id', requireTeacher, (req, res) => {
           });
         } else {
           // no dependencies - safe to delete
+          db.run('DELETE FROM test_set_items WHERE test_id=?', [id], function(setItemErr){
+            if(setItemErr) return res.status(500).json({ error: setItemErr.message });
           db.run('DELETE FROM test_classes WHERE test_id=?', [id], function(unlinkErr){
             if(unlinkErr) return res.status(500).json({ error: unlinkErr.message });
             db.run('DELETE FROM tests WHERE id=? AND teacher_id=?', [id, req.teacher.id], function(err2){
               if(err2) return res.status(500).json({ error: err2.message });
               res.json({ id: id, deleted: true });
             });
+          });
           });
         }
       }
@@ -1430,6 +1883,13 @@ app.post('/api/students', (req, res) => {
              WHERE t.public=1
                AND (t.archived IS NULL OR t.archived=0)
                AND (tc.class_id=classes.id OR t.class_id=classes.id)
+             UNION
+             SELECT 1
+             FROM test_sets ts
+             JOIN test_set_classes tsc ON tsc.set_id=ts.id
+             WHERE ts.public=1
+               AND (ts.archived IS NULL OR ts.archived=0)
+               AND tsc.class_id=classes.id
            )`,
         [class_id],
         cb
@@ -1447,6 +1907,13 @@ app.post('/api/students', (req, res) => {
              WHERE t.public=1
                AND (t.archived IS NULL OR t.archived=0)
                AND (tc.class_id=classes.id OR t.class_id=classes.id)
+             UNION
+             SELECT 1
+             FROM test_sets ts
+             JOIN test_set_classes tsc ON tsc.set_id=ts.id
+             WHERE ts.public=1
+               AND (ts.archived IS NULL OR ts.archived=0)
+               AND tsc.class_id=classes.id
            )`,
         [class_name],
         cb
