@@ -128,9 +128,30 @@
               </div>
             </div>
             
-            <label>問題文
-              <textarea id="question-text" rows="4" placeholder="問題文を入力"></textarea>
-            </label>
+            <div class="rich-question-field">
+              <div class="rich-question-field__header">
+                <label id="question-editor-label">問題文</label>
+                <div class="rich-editor-toolbar" role="toolbar" aria-label="問題文の書式">
+                  <button class="btn btn-small btn-ghost" type="button" data-rich-command="bold" title="太字"><strong>B</strong></button>
+                  <button class="btn btn-small btn-ghost" type="button" data-rich-command="italic" title="斜体"><em>I</em></button>
+                  <button class="btn btn-small btn-ghost" type="button" data-rich-command="underline" title="下線"><u>U</u></button>
+                  <button class="btn btn-small btn-ghost" type="button" data-rich-command="insertUnorderedList" title="箇条書き">•</button>
+                  <button class="btn btn-small btn-ghost" type="button" data-rich-command="insertOrderedList" title="番号リスト">1.</button>
+                  <button class="btn btn-small btn-ghost" type="button" id="insert-inline-code" title="コード">Code</button>
+                  <button class="btn btn-small btn-ghost" type="button" id="insert-code-block" title="コードブロック">&lt;/&gt;</button>
+                  <button class="btn btn-small btn-ghost" type="button" id="insert-link" title="リンク">Link</button>
+                  <button class="btn btn-small btn-ghost" type="button" id="insert-image" title="画像">Image</button>
+                  <button class="btn btn-small btn-ghost" type="button" id="clear-rich-format" title="書式クリア">Clear</button>
+                </div>
+              </div>
+              <div id="question-text" class="rich-editor-surface" contenteditable="true" role="textbox" aria-labelledby="question-editor-label" aria-multiline="true" data-placeholder="問題文を入力"></div>
+              <input id="question-image-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+              <p class="task-helper-text">コード、リンク、画像を含む問題文を作成できます。画像は貼り付け、ドラッグ&ドロップ、Imageボタンから追加できます。</p>
+              <div class="rich-preview-panel" aria-live="polite">
+                <div class="rich-preview-panel__label">プレビュー</div>
+                <div id="question-preview" class="rich-question-content"></div>
+              </div>
+            </div>
             <label>解説
               <textarea id="question-explanation" rows="4" placeholder="解説を入力"></textarea>
             </label>

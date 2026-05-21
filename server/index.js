@@ -1,17 +1,121 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const multer = require('multer');
+const sanitizeHtml = require('sanitize-html');
 const db = require('./db');
 const geminiAi = require('./geminiAi');
 const QRCode = require('qrcode');
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '150kb' }));
+const uploadsRoot = path.join(__dirname, 'uploads');
+const questionImagesRoot = path.join(uploadsRoot, 'question-images');
+fs.mkdirSync(questionImagesRoot, { recursive: true });
+app.use('/uploads', express.static(uploadsRoot));
 app.use('/vendor', express.static(path.join(__dirname, 'node_modules')));
 app.use(express.static(path.join(__dirname, 'public')));
+
+const MAX_QUESTION_HTML_LENGTH = 100 * 1024;
+const allowedQuestionTags = ['p', 'br', 'strong', 'em', 'u', 'ul', 'ol', 'li', 'blockquote', 'pre', 'code', 'a', 'img'];
+const allowedQuestionAttributes = {
+  a: ['href', 'target', 'rel'],
+  img: ['src', 'alt', 'title']
+};
+
+function isInternalUploadUrl(value){
+  const raw = String(value || '').trim();
+  return /^\/uploads\/question-images\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\.(?:png|jpe?g|webp|gif)$/i.test(raw);
+}
+
+function sanitizeQuestionHtml(input){
+  const raw = String(input || '');
+  if(raw.length > MAX_QUESTION_HTML_LENGTH){
+    const err = new Error('content_html too long');
+    err.statusCode = 400;
+    throw err;
+  }
+  return sanitizeHtml(raw, {
+    allowedTags: allowedQuestionTags,
+    allowedAttributes: allowedQuestionAttributes,
+    allowedSchemes: ['http', 'https', 'mailto'],
+    allowedSchemesByTag: {
+      img: []
+    },
+    transformTags: {
+      a: function(tagName, attribs){
+        const next = Object.assign({}, attribs);
+        if(next.href && /^https?:\/\//i.test(next.href)){
+          next.target = '_blank';
+          next.rel = 'noopener noreferrer';
+        }
+        return { tagName: tagName, attribs: next };
+      },
+      img: function(tagName, attribs){
+        const src = isInternalUploadUrl(attribs && attribs.src) ? attribs.src : '';
+        if(!src) return { tagName: 'span', attribs: {} };
+        return {
+          tagName: tagName,
+          attribs: {
+            src: src,
+            alt: String((attribs && attribs.alt) || '').slice(0, 200),
+            title: String((attribs && attribs.title) || '').slice(0, 200)
+          }
+        };
+      }
+    }
+  }).trim();
+}
+
+function stripHtmlToText(html){
+  return sanitizeHtml(String(html || ''), { allowedTags: [], allowedAttributes: {} })
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeQuestionContent(body){
+  const hasHtml = body && typeof body.content_html === 'string' && body.content_html.trim();
+  const contentHtml = hasHtml ? sanitizeQuestionHtml(body.content_html) : '';
+  const text = String((body && body.text) || stripHtmlToText(contentHtml) || '').trim();
+  return {
+    text: text,
+    content_html: contentHtml,
+    content_format: contentHtml ? 'html' : 'plain'
+  };
+}
+
+const questionImageStorage = multer.diskStorage({
+  destination: function(req, file, cb){
+    const teacherId = String(req.teacher && req.teacher.id ? req.teacher.id : 'unknown');
+    const dest = path.join(questionImagesRoot, teacherId);
+    fs.mkdir(dest, { recursive: true }, function(err){ cb(err, dest); });
+  },
+  filename: function(req, file, cb){
+    const extByMime = {
+      'image/png': '.png',
+      'image/jpeg': '.jpg',
+      'image/webp': '.webp',
+      'image/gif': '.gif'
+    };
+    const ext = extByMime[file.mimetype] || path.extname(file.originalname || '').toLowerCase();
+    cb(null, Date.now() + '-' + crypto.randomBytes(8).toString('hex') + ext);
+  }
+});
+
+const uploadQuestionImage = multer({
+  storage: questionImageStorage,
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+  fileFilter: function(req, file, cb){
+    if(['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.mimetype)){
+      return cb(null, true);
+    }
+    cb(new Error('unsupported_image_type'));
+  }
+});
 
 function parseCookies(headerValue){
   const header = typeof headerValue === 'string' ? headerValue : '';
@@ -361,6 +465,8 @@ function buildStudentQuestionPayload(question, choiceRows){
     test_id: question.test_id,
     type: question.type,
     text: question.text,
+    content_html: question.content_html || '',
+    content_format: question.content_format || (question.content_html ? 'html' : 'plain'),
     points: question.points,
     choices: (choiceRows || []).map(choice => ({
       id: choice.id,
@@ -495,6 +601,8 @@ function buildAnswerFeedback(questionRow, choiceRows, submittedChoiceIds, correc
   return {
     question_id: questionRow.id,
     question_text: questionRow.text,
+    content_html: questionRow.content_html || '',
+    content_format: questionRow.content_format || (questionRow.content_html ? 'html' : 'plain'),
     correct: correct,
     explanation: String(questionRow.explanation || '').trim(),
     given_choice_ids: submittedChoiceIds,
@@ -554,6 +662,8 @@ function buildTestSummaryForStudent(testId, studentId, sessionId){
             return {
               question_id: q.id,
               text: q.text,
+              content_html: q.content_html || '',
+              content_format: q.content_format || (q.content_html ? 'html' : 'plain'),
               points: qTotal,
               correct: correct,
               explanation: String(q.explanation || '').trim(),
@@ -765,6 +875,22 @@ app.delete('/api/admin/teachers/:id', requireAdmin, (req, res) => {
 });
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
+
+app.post('/api/question-images', requireTeacher, (req, res) => {
+  uploadQuestionImage.single('image')(req, res, (err) => {
+    if(err){
+      const status = err.code === 'LIMIT_FILE_SIZE' || err.message === 'unsupported_image_type' ? 400 : 500;
+      return res.status(status).json({ error: err.message || 'upload_failed' });
+    }
+    if(!req.file){
+      return res.status(400).json({ error: 'image required' });
+    }
+    const teacherId = String(req.teacher.id);
+    res.json({
+      url: '/uploads/question-images/' + encodeURIComponent(teacherId) + '/' + encodeURIComponent(req.file.filename)
+    });
+  });
+});
 
 app.get('/api/qr-code', async (req, res) => {
   const text = typeof req.query.text === 'string' ? req.query.text.trim() : '';
@@ -1023,8 +1149,14 @@ app.delete('/api/tests/:id', requireTeacher, (req, res) => {
 app.post('/api/tests/:testId/questions', requireTeacher, (req, res) => {
   const testId = req.params.testId;
   const { type, text, points, choices, explanation } = req.body;
+  let content;
+  try{
+    content = normalizeQuestionContent(req.body || {});
+  }catch(err){
+    return res.status(err.statusCode || 400).json({ error: err.message });
+  }
   ensureTeacherOwnsTest(req, res, testId, () => {
-    db.run('INSERT INTO questions (test_id, type, text, points, explanation) VALUES (?,?,?,?,?)', [testId, type||'single', text, points||1, explanation || ''], function(err){
+    db.run('INSERT INTO questions (test_id, type, text, points, explanation, content_html, content_format) VALUES (?,?,?,?,?,?,?)', [testId, type||'single', content.text || text || '', points||1, explanation || '', content.content_html, content.content_format], function(err){
       if(err) return res.status(500).json({ error: err.message });
       const questionId = this.lastID;
       if(!choices || choices.length === 0) return res.json({ id: questionId });
@@ -1116,7 +1248,7 @@ app.post('/api/generate-questions', requireTeacher, async (req, res) => {
 
     const results = [];
     const insertQuestion = (q, cb) => {
-      db.run('INSERT INTO questions (test_id, type, text, points, explanation) VALUES (?,?,?,?,?)', [testId, q.type, q.text, q.points || 1, q.explanation || ''], function(err){
+      db.run('INSERT INTO questions (test_id, type, text, points, explanation, content_html, content_format) VALUES (?,?,?,?,?,?,?)', [testId, q.type, q.text, q.points || 1, q.explanation || '', '', 'plain'], function(err){
         if(err) return cb(err);
         const qid = this.lastID;
         const stmt = db.prepare('INSERT INTO choices (question_id, text, is_correct) VALUES (?,?,?)');
@@ -1195,7 +1327,7 @@ app.post('/api/submit-answer', (req, res) => {
           return res.status(409).json({ error: 'session_completed' });
         }
 
-        const questionRow = await dbGetAsync('SELECT id, test_id, text, explanation FROM questions WHERE id=? AND test_id=?', [question_id, test_id]);
+        const questionRow = await dbGetAsync('SELECT id, test_id, text, explanation, content_html, content_format FROM questions WHERE id=? AND test_id=?', [question_id, test_id]);
         if(!questionRow){
           await dbRunAsync('ROLLBACK');
           return res.status(400).json({ error: 'invalid_question_id' });
@@ -1542,11 +1674,17 @@ app.put('/api/exam-sessions/:id/finish', (req, res) => {
 app.put('/api/questions/:id', requireTeacher, (req, res) => {
   const id = req.params.id;
   const { text, type, points, public: pub, explanation } = req.body;
-  const vals = [text, type || 'single', points || 1, pub?1:0, explanation || '', id];
+  let content;
+  try{
+    content = normalizeQuestionContent(req.body || {});
+  }catch(err){
+    return res.status(err.statusCode || 400).json({ error: err.message });
+  }
+  const vals = [content.text || text || '', type || 'single', points || 1, pub?1:0, explanation || '', content.content_html, content.content_format, id];
   db.get('SELECT t.teacher_id FROM questions q JOIN tests t ON t.id=q.test_id WHERE q.id=?', [id], (ownErr, ownRow) => {
     if(ownErr) return res.status(500).json({ error: ownErr.message });
     if(!ownRow || ownRow.teacher_id !== req.teacher.id) return res.status(404).json({ error: 'not_found' });
-    db.run('UPDATE questions SET text=?, type=?, points=?, public=?, explanation=? WHERE id=?', vals, function(err){
+    db.run('UPDATE questions SET text=?, type=?, points=?, public=?, explanation=?, content_html=?, content_format=? WHERE id=?', vals, function(err){
       if(err) return res.status(500).json({ error: err.message });
       res.json({ id });
     });

@@ -1,12 +1,22 @@
 (function(){
   const e = React.createElement;
+  function renderRichQuestionContent(question, options){
+    const config = options || {};
+    const html = question && typeof question.content_html === 'string' ? question.content_html.trim() : '';
+    const className = config.className || 'rich-question-content';
+    if(html){
+      return e('div', { className: className, dangerouslySetInnerHTML: { __html: html } });
+    }
+    return e(config.fallbackTag || 'div', { className: className }, (question && (question.text || question.question_text)) || config.fallbackText || '');
+  }
+
   function renderQuestionList(items){
     if(!items || items.length === 0){
       return e('p', null, '（問題がありません）');
     }
     return e('ol', null, items.map(function(q){
       return e('li', { key: q.id },
-        e('div', null, q.text),
+        renderRichQuestionContent(q, { className: 'rich-question-content rich-question-content--compact' }),
         e('ul', null, (q.choices || []).map(function(c, index){
           return e('li', { key: c.id || index }, (c.text || c.name) + (c.is_correct ? ' （正解）' : ''));
         }))
@@ -66,6 +76,7 @@
                     onChange: function(ev){ handlers.updateModalQuestionText(qi, ev.target.value); }
                   })
                 ),
+                q.content_html ? renderRichQuestionContent(q, { className: 'rich-question-content rich-question-content--compact' }) : null,
                 e('div', null,
                   e('textarea', { rows: 3, value: q.explanation || '', style: { width: '100%', marginTop:6 }, onChange: function(ev){ if(handlers.updateModalQuestionExplanation) handlers.updateModalQuestionExplanation(qi, ev.target.value); } })
                 ),
@@ -526,6 +537,8 @@
         const detailsWithText = (summary.details || []).map(d => ({
           question_id: d.question_id,
           text: d.text,
+          content_html: d.content_html || '',
+          content_format: d.content_format || (d.content_html ? 'html' : 'plain'),
           points: d.points,
           correct: d.correct,
           given_choice_ids: d.given_choice_ids || [],
@@ -585,7 +598,7 @@
     function saveModal(){ if(!window.selectedTestId){ setMessage('テスト未選択'); return; } setMessage('保存中...'); const ops = [];
       modalQuestions.forEach(q=>{
         // update question (including explanation)
-        ops.push(fetch('/api/questions/'+q.id, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ text: q.text, type: q.type||'single', points: q.points||1, explanation: q.explanation || '' }) }));
+        ops.push(fetch('/api/questions/'+q.id, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ text: q.text, content_html: q.content_html || '', content_format: q.content_html ? 'html' : 'plain', type: q.type||'single', points: q.points||1, explanation: q.explanation || '' }) }));
         (q.choices||[]).forEach(c=>{
           if(c.id){ ops.push(fetch('/api/choices/'+c.id, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ text: c.text, is_correct: c.is_correct?1:0 }) })); }
           else { ops.push(fetch('/api/questions/'+q.id+'/choices', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ text: c.text, is_correct: c.is_correct?1:0 }) })); }
@@ -1188,9 +1201,11 @@
             const given_texts = (d.given_choice_ids || []).map(id => choiceMap[id] || String(id)).filter(Boolean);
             const correct_texts = (d.correct_choice_ids || []).map(id => choiceMap[id] || String(id)).filter(Boolean);
             return {
-              questionId: d.question_id,
-              text: d.text,
-              points: d.points,
+            questionId: d.question_id,
+            text: d.text,
+            content_html: d.content_html || '',
+            content_format: d.content_format || (d.content_html ? 'html' : 'plain'),
+            points: d.points,
               correct: !!d.correct,
               given_choice_ids: d.given_choice_ids || [],
               given_texts: given_texts,
@@ -1231,6 +1246,8 @@
           setLastResult({
             questionId: j.feedback.question_id || q.id,
             text: j.feedback.question_text || q.text,
+            content_html: j.feedback.content_html || q.content_html || '',
+            content_format: j.feedback.content_format || q.content_format || (j.feedback.content_html || q.content_html ? 'html' : 'plain'),
             points: q.points || 1,
             correct: !!j.feedback.correct,
             given_choice_ids: j.feedback.given_choice_ids || [],
@@ -1453,7 +1470,7 @@
                   e('div', { className: 'student-summary-card__header' },
                     e('div', null,
                       e('span', { className: 'student-summary-card__index' }, 'Q' + (index + 1)),
-                      e('h4', null, r.text || '（無題）')
+                      renderRichQuestionContent(r, { className: 'rich-question-content student-summary-question', fallbackText: '（無題）' })
                     ),
                     e('span', { className: cx('student-status-pill', r.correct ? 'is-correct' : 'is-incorrect') }, r.correct ? '理解OK' : '見直し')
                   ),
@@ -1556,7 +1573,7 @@
                 e('div', { className: 'student-feedback-card__header' },
                   e('div', null,
                     e('span', { className: 'student-question-card__type-label' }, '回答結果'),
-                    e('h3', null, lastResult.text || q.text)
+                    renderRichQuestionContent(lastResult, { className: 'rich-question-content student-question-rich' })
                   ),
                   e('span', { className: cx('student-status-pill', lastResult.correct ? 'is-correct' : 'is-incorrect') }, lastResult.correct ? '正解' : '不正解')
                 ),
@@ -1579,7 +1596,7 @@
                 e('div', { className: 'student-question-card__header' },
                     e('span', { className: 'student-question-card__type-label' }, q && q.type === 'multiple' ? '複数選択' : '１つ選択')
                   ),
-                e('h3', null, q.text),
+                renderRichQuestionContent(q, { className: 'rich-question-content student-question-rich' }),
                 e('p', { className: 'student-question-card__hint' }, ''),
                 e('div', { className: 'student-choice-list' }, (q.choices || []).map(function(c){
                   const selected = currentSelection.includes(c.id);
@@ -2025,7 +2042,7 @@
         } else {
           modalChildren.push(e('ol', null, (reportSummaryData.details || []).map(function(d){
             return e('li', { key: d.question_id, style: { marginBottom: 12 } },
-              e('div', null, e('strong', null, d.text || '（無題）')),
+              renderRichQuestionContent(d, { className: 'rich-question-content rich-question-content--compact', fallbackText: '（無題）' }),
               e('div', null, '配点: ' + (d.points || 0) + ' — ', d.correct ? e('span', { style: { color: '#157a3b', fontWeight: 700 } }, '正解') : e('span', { style: { color: '#b33', fontWeight: 700 } }, '不正解')),
               e('div', null, 'あなたの回答: ' + ((d.given_texts && d.given_texts.length) ? d.given_texts.join(', ') : '未回答')),
               e('div', null, '正答: ' + ((d.correct_texts && d.correct_texts.length) ? d.correct_texts.join(', ') : ''))

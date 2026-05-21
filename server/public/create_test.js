@@ -15,6 +15,125 @@
   const MAX_QUESTIONS = 100;
   const MIN_CHOICES = 2;
   const PAGE_SIZE = 5;
+  const MAX_QUESTION_HTML_LENGTH = 100 * 1024;
+  const ALLOWED_RICH_TAGS = new Set(['P', 'BR', 'STRONG', 'B', 'EM', 'I', 'U', 'UL', 'OL', 'LI', 'BLOCKQUOTE', 'PRE', 'CODE', 'A', 'IMG']);
+
+  function getQuestionEditor(){
+    return el('question-text');
+  }
+
+  function escapeHtml(value){
+    return String(value || '').replace(/[&<>"']/g, function(ch){
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
+    });
+  }
+
+  function normalizeRichTagName(tagName){
+    if(tagName === 'B') return 'STRONG';
+    if(tagName === 'I') return 'EM';
+    return tagName;
+  }
+
+  function isInternalImageUrl(value){
+    return /^\/uploads\/question-images\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\.(?:png|jpe?g|webp|gif)$/i.test(String(value || '').trim());
+  }
+
+  function sanitizeRichHtml(html){
+    const template = document.createElement('template');
+    template.innerHTML = String(html || '');
+    function cleanNode(node){
+      if(node.nodeType === Node.TEXT_NODE){
+        return document.createTextNode(node.textContent || '');
+      }
+      if(node.nodeType !== Node.ELEMENT_NODE){
+        return document.createTextNode('');
+      }
+      const tagName = normalizeRichTagName(node.tagName);
+      if(!ALLOWED_RICH_TAGS.has(node.tagName)){
+        const fragment = document.createDocumentFragment();
+        Array.prototype.slice.call(node.childNodes).forEach(function(child){
+          fragment.appendChild(cleanNode(child));
+        });
+        return fragment;
+      }
+      const clean = document.createElement(tagName.toLowerCase());
+      if(tagName === 'A'){
+        const href = String(node.getAttribute('href') || '').trim();
+        if(/^(https?:\/\/|mailto:)/i.test(href)){
+          clean.setAttribute('href', href);
+          if(/^https?:\/\//i.test(href)){
+            clean.setAttribute('target', '_blank');
+            clean.setAttribute('rel', 'noopener noreferrer');
+          }
+        }
+      }
+      if(tagName === 'IMG'){
+        const src = String(node.getAttribute('src') || '').trim();
+        if(!isInternalImageUrl(src)) return document.createTextNode('');
+        clean.setAttribute('src', src);
+        clean.setAttribute('alt', String(node.getAttribute('alt') || '').slice(0, 200));
+        clean.setAttribute('title', String(node.getAttribute('title') || '').slice(0, 200));
+      }
+      Array.prototype.slice.call(node.childNodes).forEach(function(child){
+        clean.appendChild(cleanNode(child));
+      });
+      return clean;
+    }
+    const out = document.createElement('div');
+    Array.prototype.slice.call(template.content.childNodes).forEach(function(child){
+      out.appendChild(cleanNode(child));
+    });
+    return out.innerHTML.trim();
+  }
+
+  function getQuestionHtml(){
+    const editor = getQuestionEditor();
+    return sanitizeRichHtml(editor ? editor.innerHTML : '');
+  }
+
+  function getQuestionPlainText(){
+    const editor = getQuestionEditor();
+    return String(editor ? editor.textContent : '').replace(/\s+/g, ' ').trim();
+  }
+
+  function setQuestionHtml(html, fallbackText){
+    const editor = getQuestionEditor();
+    if(!editor) return;
+    const safeHtml = sanitizeRichHtml(html || '');
+    editor.innerHTML = safeHtml || (fallbackText ? escapeHtml(fallbackText) : '');
+    updateQuestionPreview();
+  }
+
+  function updateQuestionPreview(){
+    const preview = el('question-preview');
+    if(!preview) return;
+    const html = getQuestionHtml();
+    const text = getQuestionPlainText();
+    preview.innerHTML = html || (text ? escapeHtml(text) : '<span class="rich-preview-placeholder">問題文のプレビュー</span>');
+  }
+
+  function questionPayloadFields(question){
+    const html = String((question && question.content_html) || '').trim();
+    const text = String((question && question.text) || '').trim();
+    return {
+      text: text,
+      content_html: html,
+      content_format: html ? 'html' : 'plain'
+    };
+  }
+
+  function buildQuestionRequestPayload(question){
+    const content = questionPayloadFields(question);
+    return {
+      text: content.text,
+      content_html: content.content_html,
+      content_format: content.content_format,
+      type: question.type || 'single',
+      points: question.points || 1,
+      choices: question.choices,
+      explanation: question.explanation || ''
+    };
+  }
 
   function cloneQuestions(questions){
     return JSON.parse(JSON.stringify(questions || []));
@@ -30,6 +149,8 @@
   function normalizeQuestion(question){
     return {
       text: String((question && question.text) || '').trim(),
+      content_html: sanitizeRichHtml((question && question.content_html) || ''),
+      content_format: question && question.content_html ? 'html' : 'plain',
       type: question && question.type ? question.type : 'single',
       points: question && question.points ? question.points : 1,
       explanation: String((question && question.explanation) || '').trim(),
@@ -57,10 +178,10 @@
   }
 
   function hasPendingEditorChanges(){
-    const questionField = el('question-text');
     const explanationField = el('question-explanation');
     const draft = {
-      text: String(questionField ? questionField.value : '').trim(),
+      text: getQuestionPlainText(),
+      content_html: getQuestionHtml(),
       explanation: String(explanationField ? explanationField.value : '').trim(),
       choices: state.editorChoices.map(normalizeChoice).filter(function(choice){
         return choice.text || choice.is_correct;
@@ -71,6 +192,7 @@
       const source = state.questions[state.editingIndex];
       const original = {
         text: String((source && source.text) || '').trim(),
+        content_html: sanitizeRichHtml((source && source.content_html) || ''),
         explanation: String((source && source.explanation) || '').trim(),
         choices: ((source && source.choices) || []).map(normalizeChoice).filter(function(choice){
           return choice.text || choice.is_correct;
@@ -79,7 +201,7 @@
       return JSON.stringify(draft) !== JSON.stringify(original);
     }
 
-    return draft.text !== '' || draft.explanation !== '' || draft.choices.length > 0;
+    return draft.text !== '' || draft.content_html !== '' || draft.explanation !== '' || draft.choices.length > 0;
   }
 
   function refreshDirtyState(){
@@ -134,6 +256,8 @@
     const correctCount = choices.filter(function(choice){ return choice.is_correct; }).length;
     return {
       text: String((question && question.text) || '').trim(),
+      content_html: '',
+      content_format: 'plain',
       choices: choices,
       type: question && question.type ? question.type : (correctCount > 1 ? 'multiple' : 'single'),
       points: question && question.points ? question.points : 1,
@@ -213,7 +337,7 @@
 
   function resetEditor(options){
     const config = options || {};
-    el('question-text').value = '';
+    setQuestionHtml('');
     el('question-explanation').value = '';
     state.editorChoices = [ createEmptyChoice(), createEmptyChoice() ];
     state.editingIndex = -1;
@@ -342,6 +466,8 @@
     // deep clone the question structure but omit DB ids so it becomes a new local question
     const clone = {
       text: src.text || '',
+      content_html: src.content_html || '',
+      content_format: src.content_html ? 'html' : 'plain',
       choices: (src.choices || []).map(c => ({ text: c.text || '', is_correct: !!c.is_correct })),
       type: src.type || ((src.choices||[]).filter(c=>c.is_correct).length>1 ? 'multiple' : 'single'),
       points: src.points || 1,
@@ -360,14 +486,17 @@
 
   function editQuestion(index){
     const q = state.questions[index]; if(!q) return;
-    setEditorTitle('問題を編集'); el('question-text').value = q.text || '';
+    setEditorTitle('問題を編集'); setQuestionHtml(q.content_html || '', q.text || '');
     el('question-explanation').value = q.explanation || '';
     state.editorChoices = (q.choices || []).map(c => ({ id: c.id, text: c.text || '', is_correct: !!c.is_correct }));
     state.editingIndex = index; renderChoicesEditor(); refreshDirtyState(); focusQuestionField();
   }
 
   function addQuestionFromEditor(){
-    const text = el('question-text').value.trim(); if(!text){ setStatus('問題文を入力してください', true); return; }
+    const contentHtml = getQuestionHtml();
+    const text = getQuestionPlainText();
+    if(contentHtml.length > MAX_QUESTION_HTML_LENGTH){ setStatus('問題文のHTMLが長すぎます', true); return; }
+    if(!text && !contentHtml){ setStatus('問題文を入力してください', true); return; }
     const explanation = el('question-explanation').value.trim();
     if(state.editingIndex < 0 && state.questions.length >= MAX_QUESTIONS){ setStatus('問題は最大100問までです', true); return; }
     const choices = state.editorChoices.map(c=>({ id: c.id, text: (c.text||'').trim(), is_correct: !!c.is_correct })).filter(c=>c.text);
@@ -375,7 +504,7 @@
     const correctCount = choices.filter(c=>c.is_correct).length;
     if(correctCount === 0){ setStatus('少なくとも1つの選択肢を正解に設定してください', true); return; }
     const type = correctCount > 1 ? 'multiple' : 'single';
-    const q = { text: text, choices: choices, type: type, points: 1, explanation: explanation };
+    const q = { text: text, content_html: contentHtml, content_format: contentHtml ? 'html' : 'plain', choices: choices, type: type, points: 1, explanation: explanation };
     if(state.editingIndex >= 0){
       // preserve id if editing existing question
       const orig = state.questions[state.editingIndex];
@@ -408,7 +537,7 @@
         for(const q of state.questions){
           if(q.id){
             // update question
-            await requestJson('/api/questions/' + q.id, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ text: q.text, type: q.type || 'single', points: q.points || 1, explanation: q.explanation || '' }) }, '問題更新に失敗しました');
+            await requestJson('/api/questions/' + q.id, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(buildQuestionRequestPayload(q)) }, '問題更新に失敗しました');
             // process choices
             for(const c of q.choices || []){
               if(c.id){
@@ -419,7 +548,7 @@
             }
           } else {
             // new question
-            await requestJson('/api/tests/' + editingTestId + '/questions', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ text: q.text, type: q.type || 'single', points: q.points || 1, choices: q.choices, explanation: q.explanation || '' }) }, '問題追加に失敗しました');
+            await requestJson('/api/tests/' + editingTestId + '/questions', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(buildQuestionRequestPayload(q)) }, '問題追加に失敗しました');
           }
         }
         markSavedState();
@@ -431,7 +560,7 @@
         if(!j || !j.id){ setStatus('テスト作成に失敗しました', true); btn.disabled=false; return; }
         const testId = j.id;
         for(const q of state.questions){
-          await requestJson('/api/tests/' + testId + '/questions', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ text: q.text, type: q.type || 'single', points: q.points || 1, choices: q.choices, explanation: q.explanation || '' }) }, '問題追加に失敗しました');
+          await requestJson('/api/tests/' + testId + '/questions', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(buildQuestionRequestPayload(q)) }, '問題追加に失敗しました');
         }
         markSavedState();
         setStatus('テストを作成しました（ID: ' + testId + '）。2秒後にダッシュボードへ戻ります。');
@@ -472,6 +601,142 @@
     }
   }
 
+  function focusEditor(){
+    const editor = getQuestionEditor();
+    if(editor) editor.focus();
+  }
+
+  function execRichCommand(command, value){
+    focusEditor();
+    document.execCommand(command, false, value || null);
+    updateQuestionPreview();
+    refreshDirtyState();
+  }
+
+  function insertHtmlAtSelection(html){
+    focusEditor();
+    document.execCommand('insertHTML', false, html);
+    updateQuestionPreview();
+    refreshDirtyState();
+  }
+
+  function insertInlineCode(){
+    const selection = window.getSelection();
+    const text = selection && selection.toString() ? selection.toString() : 'code';
+    insertHtmlAtSelection('<code>' + escapeHtml(text) + '</code>');
+  }
+
+  function insertCodeBlock(){
+    const code = window.prompt('コードを入力してください');
+    if(code === null) return;
+    insertHtmlAtSelection('<pre><code>' + escapeHtml(code) + '</code></pre><p><br></p>');
+  }
+
+  function insertLink(){
+    const selection = window.getSelection();
+    const label = selection && selection.toString() ? selection.toString() : '';
+    const href = window.prompt('リンクURLを入力してください（http, https, mailto）');
+    if(!href) return;
+    if(!/^(https?:\/\/|mailto:)/i.test(href.trim())){
+      setStatus('リンクURLは http, https, mailto のみ利用できます', true);
+      return;
+    }
+    insertHtmlAtSelection('<a href="' + escapeHtml(href.trim()) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(label || href.trim()) + '</a>');
+  }
+
+  function insertImageUrl(url, alt){
+    insertHtmlAtSelection('<p><img src="' + escapeHtml(url) + '" alt="' + escapeHtml(alt || '') + '"></p>');
+  }
+
+  async function uploadQuestionImageFile(file){
+    if(!file) return;
+    if(!/^image\/(png|jpeg|webp|gif)$/.test(file.type || '')){
+      setStatus('PNG、JPEG、WebP、GIF画像を選択してください', true);
+      return;
+    }
+    const form = new FormData();
+    form.append('image', file);
+    setStatus('画像をアップロードしています...');
+    try{
+      const response = await fetch('/api/question-images', { method: 'POST', body: form });
+      const payload = await response.json().catch(function(){ return null; });
+      if(!response.ok || !payload || !payload.url){
+        throw new Error((payload && payload.error) || '画像アップロードに失敗しました');
+      }
+      insertImageUrl(payload.url, file.name || '');
+      setStatus('画像を追加しました');
+    }catch(err){
+      console.error(err);
+      setStatus(err.message || '画像アップロードに失敗しました', true);
+    }
+  }
+
+  function setupRichQuestionEditor(){
+    const editor = getQuestionEditor();
+    if(!editor) return;
+
+    document.querySelectorAll('[data-rich-command]').forEach(function(button){
+      button.addEventListener('click', function(){
+        execRichCommand(button.getAttribute('data-rich-command'));
+      });
+    });
+    const inlineCode = el('insert-inline-code');
+    if(inlineCode) inlineCode.addEventListener('click', insertInlineCode);
+    const codeBlock = el('insert-code-block');
+    if(codeBlock) codeBlock.addEventListener('click', insertCodeBlock);
+    const linkButton = el('insert-link');
+    if(linkButton) linkButton.addEventListener('click', insertLink);
+    const imageButton = el('insert-image');
+    const imageFile = el('question-image-file');
+    if(imageButton && imageFile) imageButton.addEventListener('click', function(){ imageFile.click(); });
+    if(imageFile) imageFile.addEventListener('change', function(){
+      const file = imageFile.files && imageFile.files[0];
+      uploadQuestionImageFile(file).finally(function(){ imageFile.value = ''; });
+    });
+    const clearButton = el('clear-rich-format');
+    if(clearButton) clearButton.addEventListener('click', function(){
+      const text = getQuestionPlainText();
+      setQuestionHtml(text ? '<p>' + escapeHtml(text) + '</p>' : '');
+      refreshDirtyState();
+    });
+
+    editor.addEventListener('input', function(){
+      updateQuestionPreview();
+      refreshDirtyState();
+    });
+    editor.addEventListener('keydown', function(e){
+      if((e.ctrlKey || e.metaKey) && e.key === 'Enter'){
+        e.preventDefault();
+        addQuestionFromEditor();
+      }
+    });
+    editor.addEventListener('paste', function(e){
+      const items = e.clipboardData && e.clipboardData.items ? Array.prototype.slice.call(e.clipboardData.items) : [];
+      const imageItem = items.find(function(item){ return item.type && item.type.indexOf('image/') === 0; });
+      if(imageItem){
+        e.preventDefault();
+        uploadQuestionImageFile(imageItem.getAsFile());
+        return;
+      }
+      const plain = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+      if(plain){
+        e.preventDefault();
+        insertHtmlAtSelection(escapeHtml(plain).replace(/\n/g, '<br>'));
+      }
+    });
+    editor.addEventListener('dragover', function(e){ e.preventDefault(); editor.classList.add('is-dragging'); });
+    editor.addEventListener('dragleave', function(){ editor.classList.remove('is-dragging'); });
+    editor.addEventListener('drop', function(e){
+      editor.classList.remove('is-dragging');
+      const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if(file && file.type && file.type.indexOf('image/') === 0){
+        e.preventDefault();
+        uploadQuestionImageFile(file);
+      }
+    });
+    updateQuestionPreview();
+  }
+
   document.addEventListener('DOMContentLoaded', function(){
     el('add-choice').addEventListener('click', function(e){ e.preventDefault(); state.editorChoices.push(createEmptyChoice()); renderChoicesEditor(); refreshDirtyState(); focusChoiceInput(state.editorChoices.length - 1); });
     el('set-two-choices').addEventListener('click', function(e){ e.preventDefault(); setChoiceCount(2); refreshDirtyState(); setStatus('選択肢を2件に整えました'); focusChoiceInput(0); });
@@ -479,8 +744,7 @@
     el('add-question').addEventListener('click', function(e){ e.preventDefault(); addQuestionFromEditor(); });
     el('clear-editor').addEventListener('click', function(e){ e.preventDefault(); resetEditor(); refreshDirtyState(); setStatus('エディタをクリアしました'); });
     el('save-test').addEventListener('click', function(e){ e.preventDefault(); saveTest(); });
-    el('question-text').addEventListener('keydown', function(e){ if((e.ctrlKey || e.metaKey) && e.key === 'Enter'){ e.preventDefault(); addQuestionFromEditor(); } });
-    el('question-text').addEventListener('input', refreshDirtyState);
+    setupRichQuestionEditor();
     el('question-explanation').addEventListener('input', refreshDirtyState);
     el('class-select').addEventListener('change', refreshDirtyState);
 
@@ -525,7 +789,7 @@
           const qr = await fetch('/api/tests/' + encodeURIComponent(presetTestId) + '/questions');
           const qjson = await qr.json().catch(()=>[]);
           // map to editor format (preserve ids)
-          state.questions = (qjson || []).map(q => ({ id: q.id, text: q.text || '', choices: (q.choices || []).map(c => ({ id: c.id, text: c.text || '', is_correct: !!c.is_correct })), type: q.type || ( ((q.choices||[]).filter(c=>c.is_correct).length>1) ? 'multiple' : 'single' ), points: q.points || 1, explanation: q.explanation || '' }));
+          state.questions = (qjson || []).map(q => ({ id: q.id, text: q.text || '', content_html: q.content_html || '', content_format: q.content_html ? 'html' : 'plain', choices: (q.choices || []).map(c => ({ id: c.id, text: c.text || '', is_correct: !!c.is_correct })), type: q.type || ( ((q.choices||[]).filter(c=>c.is_correct).length>1) ? 'multiple' : 'single' ), points: q.points || 1, explanation: q.explanation || '' }));
           renderQuestionsList();
           refreshDirtyState();
         }catch(e){ console.error(e); setStatus('テストの問題読み込みに失敗しました', true); }

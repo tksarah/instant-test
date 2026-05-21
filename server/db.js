@@ -95,6 +95,8 @@ db.serialize(() => {
     points INTEGER DEFAULT 1,
     public INTEGER DEFAULT 1,
     explanation TEXT DEFAULT '',
+    content_html TEXT DEFAULT '',
+    content_format TEXT DEFAULT 'plain',
     FOREIGN KEY(test_id) REFERENCES tests(id)
   );`);
 
@@ -106,6 +108,20 @@ db.serialize(() => {
       db.run("ALTER TABLE questions ADD COLUMN explanation TEXT DEFAULT ''", (e) => {
         if(e){ console.error('Failed to add explanation column:', e.message); }
         else { console.log('Added explanation column to questions'); }
+      });
+    }
+    const hasContentHtml = rows && rows.some(r => r.name === 'content_html');
+    if(!hasContentHtml){
+      db.run("ALTER TABLE questions ADD COLUMN content_html TEXT DEFAULT ''", (e) => {
+        if(e){ console.error('Failed to add content_html column:', e.message); }
+        else { console.log('Added content_html column to questions'); }
+      });
+    }
+    const hasContentFormat = rows && rows.some(r => r.name === 'content_format');
+    if(!hasContentFormat){
+      db.run("ALTER TABLE questions ADD COLUMN content_format TEXT DEFAULT 'plain'", (e) => {
+        if(e){ console.error('Failed to add content_format column:', e.message); }
+        else { console.log('Added content_format column to questions'); }
       });
     }
   });
