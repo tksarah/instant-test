@@ -460,6 +460,70 @@ legend{padding:0 8px;color:var(--text-strong);font-weight:700}
 .share-qr-modal__hint{font-size:13px;color:var(--text-muted)}
 .share-qr-modal__error{font-size:13px;color:#b33;font-weight:700}
 .share-qr-modal__actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap}
+.modal-backdrop{
+  position:fixed;
+  inset:0;
+  z-index:1000;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:20px;
+  background:rgba(24,50,74,.48);
+}
+.assignment-modal{
+  width:min(560px,100%);
+  max-height:min(680px,92vh);
+  overflow:auto;
+  display:grid;
+  gap:16px;
+  padding:22px;
+  border-radius:8px;
+  background:#fff;
+  box-shadow:0 24px 70px rgba(24,50,74,.24);
+}
+.assignment-modal__header,
+.assignment-modal__actions{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:12px;
+  flex-wrap:wrap;
+}
+.assignment-modal__header h2{margin:0}
+.assignment-modal__list{display:grid;gap:8px}
+.assignment-class-option{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:10px 12px;
+  border:1px solid var(--border-soft);
+  border-radius:8px;
+  background:#fff;
+  font-weight:700;
+  color:var(--text-strong);
+}
+.assignment-class-option.is-selected{
+  border-color:var(--color-main);
+  background:#f0f6fb;
+}
+.teacher-assignment-chips{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+}
+.teacher-assignment-chip{
+  display:inline-flex;
+  align-items:center;
+  min-height:26px;
+  padding:0 10px;
+  border-radius:999px;
+  border:1px solid var(--border-soft);
+  background:#f7fafc;
+  color:var(--text-strong);
+  font-size:12px;
+  font-weight:800;
+}
+.teacher-assignment-chip.is-empty{color:var(--text-muted)}
 
 .result-box{margin-top:10px;padding:10px;border:1px solid var(--border-soft);border-radius:14px}
 .result-box.correct{border-left:4px solid var(--correct)}
@@ -1333,7 +1397,7 @@ label{font-size:13px;color:var(--text-muted);font-weight:500}
 
 .teacher-workspace-grid{
   display:grid;
-  grid-template-columns:minmax(0,1.16fr) minmax(340px,0.98fr);
+  grid-template-columns:minmax(0,1fr) minmax(280px,320px);
   gap:18px;
   align-items:start;
 }

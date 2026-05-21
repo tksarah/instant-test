@@ -53,6 +53,19 @@ db.serialize(() => {
     FOREIGN KEY(class_id) REFERENCES classes(id)
   );`);
 
+  db.run(`CREATE TABLE IF NOT EXISTS test_classes (
+    test_id INTEGER NOT NULL,
+    class_id INTEGER NOT NULL,
+    PRIMARY KEY(test_id, class_id),
+    FOREIGN KEY(test_id) REFERENCES tests(id),
+    FOREIGN KEY(class_id) REFERENCES classes(id)
+  );`);
+
+  db.run('CREATE INDEX IF NOT EXISTS idx_test_classes_class ON test_classes(class_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_test_classes_test ON test_classes(test_id)');
+  db.run(`INSERT OR IGNORE INTO test_classes (test_id, class_id)
+    SELECT id, class_id FROM tests WHERE class_id IS NOT NULL`);
+
   // Ensure existing DB has 'teacher_id' column in tests
   db.all("PRAGMA table_info('tests')", (err, rows) => {
     if(err) return;

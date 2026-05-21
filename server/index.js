@@ -288,6 +288,7 @@ async function deleteTeacherCascade(teacherId){
     await dbRunAsync('DELETE FROM exam_sessions WHERE test_id IN (SELECT id FROM tests WHERE teacher_id=?) OR student_id IN (SELECT id FROM students WHERE class_id IN (SELECT id FROM classes WHERE teacher_id=?))', [id, id]);
     await dbRunAsync('DELETE FROM choices WHERE question_id IN (SELECT id FROM questions WHERE test_id IN (SELECT id FROM tests WHERE teacher_id=?))', [id]);
     await dbRunAsync('DELETE FROM questions WHERE test_id IN (SELECT id FROM tests WHERE teacher_id=?)', [id]);
+    await dbRunAsync('DELETE FROM test_classes WHERE test_id IN (SELECT id FROM tests WHERE teacher_id=?) OR class_id IN (SELECT id FROM classes WHERE teacher_id=?)', [id, id]);
     await dbRunAsync('DELETE FROM tests WHERE teacher_id=?', [id]);
     await dbRunAsync('DELETE FROM students WHERE class_id IN (SELECT id FROM classes WHERE teacher_id=?)', [id]);
     await dbRunAsync('DELETE FROM classes WHERE teacher_id=?', [id]);
@@ -413,6 +414,84 @@ function normalizeAnswerMode(value){
 function normalizeTeacherNote(value){
   if(typeof value !== 'string') return '';
   return value.slice(0, 1000);
+}
+
+function normalizeClassIdsFromBody(body){
+  const source = Array.isArray(body && body.class_ids)
+    ? body.class_ids
+    : (typeof (body && body.class_id) !== 'undefined' && body.class_id !== null && body.class_id !== '' ? [body.class_id] : []);
+  const ids = source
+    .map(value => parseInt(value, 10))
+    .filter(value => Number.isInteger(value) && value > 0);
+  return Array.from(new Set(ids));
+}
+
+async function ensureTeacherOwnsClassesAsync(teacherId, classIds){
+  const ids = Array.isArray(classIds) ? classIds : [];
+  if(ids.length === 0) return;
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = await dbAllAsync(
+    `SELECT id FROM classes WHERE teacher_id=? AND id IN (${placeholders})`,
+    [teacherId].concat(ids)
+  );
+  if(rows.length !== ids.length){
+    const err = new Error('class_not_found');
+    err.statusCode = 404;
+    throw err;
+  }
+}
+
+async function replaceTestClasses(testId, classIds){
+  const ids = Array.isArray(classIds) ? classIds : [];
+  await dbRunAsync('DELETE FROM test_classes WHERE test_id=?', [testId]);
+  for(const classId of ids){
+    await dbRunAsync('INSERT OR IGNORE INTO test_classes (test_id, class_id) VALUES (?,?)', [testId, classId]);
+  }
+}
+
+async function hydrateTestsForResponse(rows, includeTeacherNote){
+  const tests = (rows || []).map(row => serializeTestForResponse(row, includeTeacherNote));
+  if(tests.length === 0) return tests;
+  const ids = tests.map(row => row.id);
+  const placeholders = ids.map(() => '?').join(',');
+  const assignments = await dbAllAsync(
+    `SELECT tc.test_id, c.id, c.name
+     FROM test_classes tc
+     JOIN classes c ON c.id=tc.class_id
+     WHERE tc.test_id IN (${placeholders})
+     ORDER BY c.name ASC, c.id ASC`,
+    ids
+  );
+  const byTest = {};
+  assignments.forEach(row => {
+    byTest[row.test_id] = byTest[row.test_id] || [];
+    byTest[row.test_id].push({ id: row.id, name: row.name });
+  });
+  return tests.map(test => {
+    const assigned = byTest[test.id] || [];
+    const classIds = assigned.map(row => row.id);
+    const representativeClassId = classIds.length ? classIds[0] : (test.class_id || null);
+    return Object.assign({}, test, {
+      class_id: representativeClassId,
+      class_ids: classIds,
+      assigned_classes: assigned
+    });
+  });
+}
+
+async function studentCanAccessTest(studentClassId, testId){
+  const row = await dbGetAsync(
+    `SELECT 1 AS ok
+     FROM test_classes
+     WHERE test_id=? AND class_id=?
+     UNION
+     SELECT 1 AS ok
+     FROM tests
+     WHERE id=? AND class_id=?
+     LIMIT 1`,
+    [testId, studentClassId, testId, studentClassId]
+  );
+  return !!row;
 }
 
 function serializeTestForResponse(row, includeTeacherNote){
@@ -601,7 +680,7 @@ function authorizeExamSessionAccess(req, res, sessionId, cb){
 
       if(!req.student) return res.status(401).json({ error: 'unauthorized' });
       if(req.student.id !== session.student_id) return res.status(403).json({ error: 'forbidden' });
-      if(Number(req.student.class_id) !== Number(session.class_id)) return res.status(403).json({ error: 'forbidden' });
+      if(!(await studentCanAccessTest(req.student.class_id, session.test_id))) return res.status(403).json({ error: 'forbidden' });
       return cb(session, { actor: 'student' });
     }catch(err){
       return res.status(500).json({ error: err.message });
@@ -720,7 +799,7 @@ function authorizeStudentTestAccess(req, res, testId, studentId, cb){
       if(!test) return res.status(404).json({ error: 'not_found' });
       if(!req.student) return res.status(401).json({ error: 'unauthorized' });
       if(req.student.id !== requestedStudentId) return res.status(403).json({ error: 'forbidden' });
-      if(Number(req.student.class_id) !== Number(test.class_id)) return res.status(403).json({ error: 'forbidden' });
+      if(!(await studentCanAccessTest(req.student.class_id, requestedTestId))) return res.status(403).json({ error: 'forbidden' });
       return cb({ studentId: requestedStudentId, test: test, actor: 'student' });
     }catch(err){
       return res.status(500).json({ error: err.message });
@@ -946,7 +1025,17 @@ app.get('/api/classes', (req, res) => {
   }
   // Public(student) view: only classes that have at least one public test
   db.all(
-    'SELECT c.id, c.name FROM classes c WHERE EXISTS (SELECT 1 FROM tests t WHERE t.class_id=c.id AND t.public=1) ORDER BY c.name ASC',
+    `SELECT c.id, c.name
+     FROM classes c
+     WHERE EXISTS (
+       SELECT 1
+       FROM tests t
+       LEFT JOIN test_classes tc ON tc.test_id=t.id
+       WHERE t.public=1
+         AND (t.archived IS NULL OR t.archived=0)
+         AND (tc.class_id=c.id OR t.class_id=c.id)
+     )
+     ORDER BY c.name ASC`,
     (err, rows) => {
       if(err) return res.status(500).json({ error: err.message });
       res.json(rows || []);
@@ -975,8 +1064,13 @@ app.delete('/api/classes/:id', requireTeacher, (req, res) => {
   const id = req.params.id;
   ensureTeacherOwnsClass(req, res, id, () => {
     db.get(
-      'SELECT (SELECT COUNT(*) FROM tests WHERE class_id=? AND teacher_id=?) AS tests, (SELECT COUNT(*) FROM students WHERE class_id=?) AS students',
-      [id, req.teacher.id, id],
+      `SELECT
+        (SELECT COUNT(DISTINCT t.id)
+         FROM tests t
+         LEFT JOIN test_classes tc ON tc.test_id=t.id
+         WHERE t.teacher_id=? AND (t.class_id=? OR tc.class_id=?)) AS tests,
+        (SELECT COUNT(*) FROM students WHERE class_id=?) AS students`,
+      [req.teacher.id, id, id, id],
       (err, row) => {
         if(err) return res.status(500).json({ error: err.message });
         const hasDeps = row && (row.tests > 0 || row.students > 0);
@@ -999,9 +1093,12 @@ app.delete('/api/classes/:id', requireTeacher, (req, res) => {
                       if(err6) return res.status(500).json({ error: err6.message });
                       db.run('DELETE FROM students WHERE class_id=?', [id], function(err7){
                         if(err7) return res.status(500).json({ error: err7.message });
-                        db.run('DELETE FROM classes WHERE id=? AND teacher_id=?', [id, req.teacher.id], function(err8){
-                          if(err8) return res.status(500).json({ error: err8.message });
-                          res.json({ id: Number(id), deleted: true, cascade: true });
+                        db.run('DELETE FROM test_classes WHERE class_id=?', [id], function(unlinkErr){
+                          if(unlinkErr) return res.status(500).json({ error: unlinkErr.message });
+                          db.run('DELETE FROM classes WHERE id=? AND teacher_id=?', [id, req.teacher.id], function(err8){
+                            if(err8) return res.status(500).json({ error: err8.message });
+                            res.json({ id: Number(id), deleted: true, cascade: true });
+                          });
                         });
                       });
                     });
@@ -1014,8 +1111,12 @@ app.delete('/api/classes/:id', requireTeacher, (req, res) => {
           // no dependencies - safe to delete
           db.run('DELETE FROM classes WHERE id=? AND teacher_id=?', [id, req.teacher.id], function(err2){
             if(err2) return res.status(500).json({ error: err2.message });
-            db.run('UPDATE tests SET class_id=NULL WHERE class_id=? AND teacher_id=?', [id, req.teacher.id], function(err3){
-              res.json({ id: id, deleted: true });
+            db.run('DELETE FROM test_classes WHERE class_id=?', [id], function(unlinkErr){
+              if(unlinkErr) return res.status(500).json({ error: unlinkErr.message });
+              db.run('UPDATE tests SET class_id=NULL WHERE class_id=? AND teacher_id=?', [id, req.teacher.id], function(err3){
+                if(err3) return res.status(500).json({ error: err3.message });
+                res.json({ id: id, deleted: true });
+              });
             });
           });
         }
@@ -1025,28 +1126,29 @@ app.delete('/api/classes/:id', requireTeacher, (req, res) => {
 });
 
 // Tests
-app.post('/api/tests', requireTeacher, (req, res) => {
-  const { class_id, name, description, public: pub, randomize, answer_mode, teacher_note } = req.body;
+app.post('/api/tests', requireTeacher, async (req, res) => {
+  const { name, description, public: pub, randomize, answer_mode, teacher_note } = req.body;
   const answerMode = normalizeAnswerMode(answer_mode);
   const teacherNote = normalizeTeacherNote(teacher_note);
-  const proceed = () => {
-    db.run(
+  const classIds = normalizeClassIdsFromBody(req.body || {});
+  try{
+    await ensureTeacherOwnsClassesAsync(req.teacher.id, classIds);
+    const representativeClassId = classIds.length ? classIds[0] : null;
+    const inserted = await dbRunAsync(
       'INSERT INTO tests (teacher_id, class_id, name, description, teacher_note, public, randomize, answer_mode) VALUES (?,?,?,?,?,?,?,?)',
-      [req.teacher.id, class_id||null, name, description||'', teacherNote, pub?1:0, randomize?1:0, answerMode],
-      function(err){
-        if(err) return res.status(500).json({ error: err.message });
-        res.json({ id: this.lastID, answer_mode: answerMode, teacher_note: teacherNote });
-      }
+      [req.teacher.id, representativeClassId, name, description||'', teacherNote, pub?1:0, randomize?1:0, answerMode]
     );
-  };
-  if(class_id){
-    return ensureTeacherOwnsClass(req, res, class_id, () => proceed());
+    await replaceTestClasses(inserted.lastID, classIds);
+    const row = await dbGetAsync('SELECT * FROM tests WHERE id=? AND teacher_id=?', [inserted.lastID, req.teacher.id]);
+    const hydrated = await hydrateTestsForResponse([row], true);
+    res.json(hydrated[0]);
+  }catch(err){
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
-  proceed();
 });
 app.get('/api/tests', (req, res) => {
   const { class_id, public: pub, archived, include_archived } = req.query;
-  let sql = 'SELECT * FROM tests';
+  let sql = 'SELECT DISTINCT tests.* FROM tests';
   const params = [];
   const conditions = [];
   const wantsArchivedOnly = archived === '1' || archived === 1;
@@ -1054,7 +1156,11 @@ app.get('/api/tests', (req, res) => {
   if(req.teacher){
     conditions.push('teacher_id=?');
     params.push(req.teacher.id);
-    if(class_id){ conditions.push('class_id=?'); params.push(class_id); }
+    if(class_id){
+      sql += ' LEFT JOIN test_classes tc_filter ON tc_filter.test_id=tests.id';
+      conditions.push('(tests.class_id=? OR tc_filter.class_id=?)');
+      params.push(class_id, class_id);
+    }
     if(typeof pub !== 'undefined'){
       conditions.push('public=?'); params.push(pub==1 || pub==='1' ? 1 : 0);
     }
@@ -1067,13 +1173,21 @@ app.get('/api/tests', (req, res) => {
     // Public(student) view: only published tests
     conditions.push('public=1');
     conditions.push('(archived IS NULL OR archived=0)');
-    if(class_id){ conditions.push('class_id=?'); params.push(class_id); }
+    if(class_id){
+      sql += ' LEFT JOIN test_classes tc_filter ON tc_filter.test_id=tests.id';
+      conditions.push('(tests.class_id=? OR tc_filter.class_id=?)');
+      params.push(class_id, class_id);
+    }
   }
   if(conditions.length > 0){ sql += ' WHERE ' + conditions.join(' AND '); }
-  sql += ' ORDER BY id DESC';
-  db.all(sql, params, (err, rows) => {
+  sql += ' ORDER BY tests.id DESC';
+  db.all(sql, params, async (err, rows) => {
     if(err) return res.status(500).json({ error: err.message });
-    res.json((rows || []).map(row => serializeTestForResponse(row, !!req.teacher)));
+    try{
+      res.json(await hydrateTestsForResponse(rows || [], !!req.teacher));
+    }catch(hydrateErr){
+      res.status(500).json({ error: hydrateErr.message });
+    }
   });
 });
 
@@ -1085,14 +1199,20 @@ app.put('/api/tests/:id', requireTeacher, (req, res) => {
   const fields = ['name=?', 'description=?', 'public=?', 'randomize=?'];
   const vals = [name, description||'', pub?1:0, randomize?1:0];
   ensureTeacherOwnsTest(req, res, id, () => {
-    const proceed = () => {
+    const proceed = async () => {
+      const hasClassIds = Object.prototype.hasOwnProperty.call(req.body || {}, 'class_ids');
+      const shouldUpdateClasses = hasClassIds || Object.prototype.hasOwnProperty.call(req.body || {}, 'class_id');
+      const classIds = shouldUpdateClasses ? normalizeClassIdsFromBody(req.body || {}) : null;
+      if(shouldUpdateClasses){
+        await ensureTeacherOwnsClassesAsync(req.teacher.id, classIds);
+      }
       if(typeof answer_mode !== 'undefined'){
         fields.push('answer_mode=?');
         vals.push(normalizeAnswerMode(answer_mode));
       }
-      if(typeof class_id !== 'undefined'){
+      if(shouldUpdateClasses){
         fields.push('class_id=?');
-        vals.push(class_id);
+        vals.push(classIds.length ? classIds[0] : null);
       }
       if(typeof archived !== 'undefined'){
         fields.push('archived=?');
@@ -1104,18 +1224,15 @@ app.put('/api/tests/:id', requireTeacher, (req, res) => {
       }
       const updateSql = `UPDATE tests SET ${fields.join(', ')} WHERE id=? AND teacher_id=?`;
       vals.push(id, req.teacher.id);
-      db.run(updateSql, vals, function(err){
-        if(err) return res.status(500).json({ error: err.message });
-        db.get('SELECT * FROM tests WHERE id=? AND teacher_id=?', [id, req.teacher.id], (e, row) => {
-          if(e) return res.status(500).json({ error: e.message });
-          res.json(serializeTestForResponse(row, true));
-        });
-      });
+      await dbRunAsync(updateSql, vals);
+      if(shouldUpdateClasses){
+        await replaceTestClasses(id, classIds);
+      }
+      const row = await dbGetAsync('SELECT * FROM tests WHERE id=? AND teacher_id=?', [id, req.teacher.id]);
+      const hydrated = await hydrateTestsForResponse([row], true);
+      res.json(hydrated[0]);
     };
-    if(typeof class_id !== 'undefined' && class_id){
-      return ensureTeacherOwnsClass(req, res, class_id, () => proceed());
-    }
-    proceed();
+    proceed().catch(err => res.status(err.statusCode || 500).json({ error: err.message }));
   });
 });
 
@@ -1144,9 +1261,12 @@ app.delete('/api/tests/:id', requireTeacher, (req, res) => {
                   if(err4) return res.status(500).json({ error: err4.message });
                   db.run('DELETE FROM questions WHERE test_id=?', [id], function(err5){
                     if(err5) return res.status(500).json({ error: err5.message });
-                    db.run('DELETE FROM tests WHERE id=? AND teacher_id=?', [id, req.teacher.id], function(err6){
+                    db.run('DELETE FROM test_classes WHERE test_id=?', [id], function(unlinkErr){
+                      if(unlinkErr) return res.status(500).json({ error: unlinkErr.message });
+                      db.run('DELETE FROM tests WHERE id=? AND teacher_id=?', [id, req.teacher.id], function(err6){
                       if(err6) return res.status(500).json({ error: err6.message });
                       res.json({ id: id, deleted: true, cascade: true });
+                      });
                     });
                   });
                 });
@@ -1155,9 +1275,12 @@ app.delete('/api/tests/:id', requireTeacher, (req, res) => {
           });
         } else {
           // no dependencies - safe to delete
-          db.run('DELETE FROM tests WHERE id=? AND teacher_id=?', [id, req.teacher.id], function(err2){
-            if(err2) return res.status(500).json({ error: err2.message });
-            res.json({ id: id, deleted: true });
+          db.run('DELETE FROM test_classes WHERE test_id=?', [id], function(unlinkErr){
+            if(unlinkErr) return res.status(500).json({ error: unlinkErr.message });
+            db.run('DELETE FROM tests WHERE id=? AND teacher_id=?', [id, req.teacher.id], function(err2){
+              if(err2) return res.status(500).json({ error: err2.message });
+              res.json({ id: id, deleted: true });
+            });
           });
         }
       }
@@ -1296,10 +1419,38 @@ app.post('/api/students', (req, res) => {
   if(!name) return res.status(400).json({ error: 'name required' });
   const findClass = (cb) => {
     if(class_id){
-      db.get('SELECT * FROM classes WHERE id=? AND EXISTS (SELECT 1 FROM tests t WHERE t.class_id=classes.id AND t.public=1)', [class_id], cb);
+      db.get(
+        `SELECT *
+         FROM classes
+         WHERE id=?
+           AND EXISTS (
+             SELECT 1
+             FROM tests t
+             LEFT JOIN test_classes tc ON tc.test_id=t.id
+             WHERE t.public=1
+               AND (t.archived IS NULL OR t.archived=0)
+               AND (tc.class_id=classes.id OR t.class_id=classes.id)
+           )`,
+        [class_id],
+        cb
+      );
     }
     else if(class_name){
-      db.get('SELECT * FROM classes WHERE name=? AND EXISTS (SELECT 1 FROM tests t WHERE t.class_id=classes.id AND t.public=1)', [class_name], cb);
+      db.get(
+        `SELECT *
+         FROM classes
+         WHERE name=?
+           AND EXISTS (
+             SELECT 1
+             FROM tests t
+             LEFT JOIN test_classes tc ON tc.test_id=t.id
+             WHERE t.public=1
+               AND (t.archived IS NULL OR t.archived=0)
+               AND (tc.class_id=classes.id OR t.class_id=classes.id)
+           )`,
+        [class_name],
+        cb
+      );
     }
     else cb(null, null);
   };
@@ -1481,8 +1632,8 @@ app.get('/api/exams', requireTeacher, (req, res) => {
       params.push(req.teacher.id);
       if(test_id){ conds.push('es.test_id=?'); params.push(test_id); }
       if(student_id){ conds.push('es.student_id=?'); params.push(student_id); }
-      if(class_id){ conds.push('t.class_id=?'); params.push(class_id); }
-      let sql = 'SELECT es.*, s.name as studentName, s.class_id as studentClassId, sc.name as studentClassName, t.class_id as classId, c.name as className, t.name as testName FROM exam_sessions es LEFT JOIN students s ON s.id=es.student_id LEFT JOIN tests t ON t.id=es.test_id LEFT JOIN classes c ON c.id=t.class_id LEFT JOIN classes sc ON sc.id=s.class_id';
+      if(class_id){ conds.push('s.class_id=?'); params.push(class_id); }
+      let sql = 'SELECT es.*, s.name as studentName, s.class_id as studentClassId, sc.name as studentClassName, s.class_id as classId, sc.name as className, t.name as testName FROM exam_sessions es LEFT JOIN students s ON s.id=es.student_id LEFT JOIN tests t ON t.id=es.test_id LEFT JOIN classes sc ON sc.id=s.class_id';
       if(conds.length) sql += ' WHERE ' + conds.join(' AND ');
       sql += ' ORDER BY es.finished_at DESC';
       db.all(sql, params, (e, sessions) => {
@@ -1520,8 +1671,8 @@ app.get('/api/exams', requireTeacher, (req, res) => {
     const params = [req.teacher.id];
     if(test_id){ conditions.push('sa.test_id=?'); params.push(test_id); }
     if(student_id){ conditions.push('sa.student_id=?'); params.push(student_id); }
-    if(class_id){ conditions.push('sa.test_id IN (SELECT id FROM tests WHERE teacher_id=? AND class_id=?)'); params.push(req.teacher.id, class_id); }
-    let sql = 'SELECT DISTINCT sa.student_id, sa.test_id FROM student_answers sa JOIN tests t ON t.id=sa.test_id';
+    if(class_id){ conditions.push('s.class_id=?'); params.push(class_id); }
+    let sql = 'SELECT DISTINCT sa.student_id, sa.test_id FROM student_answers sa JOIN tests t ON t.id=sa.test_id JOIN students s ON s.id=sa.student_id';
     if(conditions.length) sql += ' WHERE ' + conditions.join(' AND ');
     db.all(sql, params, (err, combos) => {
       if(err) return res.status(500).json({ error: err.message });
@@ -1533,7 +1684,7 @@ app.get('/api/exams', requireTeacher, (req, res) => {
         const tid = c.test_id;
         // fetch student, test, questions then compute earned points
         db.get('SELECT s.id, s.name, s.class_id as studentClassId, c.name as studentClassName FROM students s LEFT JOIN classes c ON c.id=s.class_id WHERE s.id=?', [sid], (err1, studentRow) => {
-          db.get('SELECT t.id, t.name, t.class_id as classId, c.name as className FROM tests t LEFT JOIN classes c ON c.id=t.class_id WHERE t.id=?', [tid], (err2, testRow) => {
+          db.get('SELECT t.id, t.name FROM tests t WHERE t.id=?', [tid], (err2, testRow) => {
             db.all('SELECT id, points FROM questions WHERE test_id=?', [tid], (err3, questions) => {
               if(err1 || err2 || err3){
                 pending--; if(pending===0) return res.json(results);
@@ -1544,7 +1695,7 @@ app.get('/api/exams', requireTeacher, (req, res) => {
                 // attach latest exam_sessions timestamp when available
                 db.get('SELECT finished_at, started_at FROM exam_sessions WHERE student_id=? AND test_id=? ORDER BY finished_at DESC LIMIT 1', [sid, tid], (errSess, sessRow) => {
                   const dt = sessRow ? (sessRow.finished_at || sessRow.started_at) : null;
-                  results.push({ studentId: sid, studentName: studentRow?studentRow.name:null, studentClassId: studentRow?studentRow.studentClassId:null, studentClassName: studentRow?studentRow.studentClassName:null, classId: testRow?testRow.classId:null, className: testRow?testRow.className:null, testId: tid, testName: testRow?testRow.name:null, score: 0, maxScore: 0, percent: 0, status: '完了', finished_at: dt });
+                  results.push({ studentId: sid, studentName: studentRow?studentRow.name:null, studentClassId: studentRow?studentRow.studentClassId:null, studentClassName: studentRow?studentRow.studentClassName:null, classId: studentRow?studentRow.studentClassId:null, className: studentRow?studentRow.studentClassName:null, testId: tid, testName: testRow?testRow.name:null, score: 0, maxScore: 0, percent: 0, status: '完了', finished_at: dt });
                   pending--; if(pending===0) return res.json(results);
                 });
               } else {
@@ -1570,7 +1721,7 @@ app.get('/api/exams', requireTeacher, (req, res) => {
                     // attach latest exam_sessions timestamp when available
                     db.get('SELECT finished_at, started_at FROM exam_sessions WHERE student_id=? AND test_id=? ORDER BY finished_at DESC LIMIT 1', [sid, tid], (errSess, sessRow) => {
                       const dt = sessRow ? (sessRow.finished_at || sessRow.started_at) : null;
-                      results.push({ studentId: sid, studentName: studentRow?studentRow.name:null, studentClassId: studentRow?studentRow.studentClassId:null, studentClassName: studentRow?studentRow.studentClassName:null, classId: testRow?testRow.classId:null, className: testRow?testRow.className:null, testId: tid, testName: testRow?testRow.name:null, score: earned, maxScore: total, percent: total>0 ? (earned/total*100) : 0, status: '完了', finished_at: dt });
+                      results.push({ studentId: sid, studentName: studentRow?studentRow.name:null, studentClassId: studentRow?studentRow.studentClassId:null, studentClassName: studentRow?studentRow.studentClassName:null, classId: studentRow?studentRow.studentClassId:null, className: studentRow?studentRow.studentClassName:null, testId: tid, testName: testRow?testRow.name:null, score: earned, maxScore: total, percent: total>0 ? (earned/total*100) : 0, status: '完了', finished_at: dt });
                       pending--; if(pending===0) return res.json(results);
                     });
                   });

@@ -162,7 +162,7 @@
         tone: 'warning'
       };
     }
-    if(!test.class_id){
+    if(!getTestClassIds(test).length){
       return {
         label: 'クラス未割当',
         detail: 'クラスへ割り当てると、共有 QR で案内しやすくなります。',
@@ -183,6 +183,33 @@
     };
   }
 
+  function getTestClassIds(test){
+    const ids = Array.isArray(test && test.class_ids)
+      ? test.class_ids
+      : (test && test.class_id ? [test.class_id] : []);
+    return Array.from(new Set(ids.map(function(id){ return String(id); }).filter(Boolean)));
+  }
+
+  function isTestAssignedToClass(test, classId){
+    if(!classId) return false;
+    return getTestClassIds(test).indexOf(String(classId)) !== -1;
+  }
+
+  function getAssignedClasses(test, classes){
+    if(Array.isArray(test && test.assigned_classes) && test.assigned_classes.length){
+      return test.assigned_classes;
+    }
+    const ids = getTestClassIds(test);
+    return (classes || []).filter(function(c){ return ids.indexOf(String(c.id)) !== -1; });
+  }
+
+  function getAssignmentLabel(test, classes){
+    const assigned = getAssignedClasses(test, classes);
+    if(assigned.length === 0) return '未割当';
+    if(assigned.length === 1) return assigned[0].name || '1クラス';
+    return assigned.length + 'クラス';
+  }
+
   function getInitialRouteState(){
     const params = new URLSearchParams(window.location.search || '');
     const sharedTestId = (params.get('test_id') || '').trim();
@@ -194,12 +221,13 @@
     };
   }
 
-  function buildStudentAccessUrl(test){
+  function buildStudentAccessUrl(test, classId){
     const url = new URL(window.location.pathname || '/', window.location.origin);
     url.searchParams.set('access', 'student');
     url.searchParams.set('test_id', String(test.id));
-    if(test.class_id){
-      url.searchParams.set('class_id', String(test.class_id));
+    const resolvedClassId = classId || (getTestClassIds(test)[0] || '');
+    if(resolvedClassId){
+      url.searchParams.set('class_id', String(resolvedClassId));
     }
     return url.toString();
   }
@@ -259,11 +287,19 @@
     const [editingTestBusy, setEditingTestBusy] = React.useState(false);
     const [teacherNoteDrafts, setTeacherNoteDrafts] = React.useState({});
     const [teacherNoteSavingId, setTeacherNoteSavingId] = React.useState(null);
+    const [assignmentModal, setAssignmentModal] = React.useState({
+      open: false,
+      test: null,
+      classIds: [],
+      saving: false
+    });
     const [qrShareModal, setQrShareModal] = React.useState({
       open: false,
       loading: false,
+      test: null,
       testName: '',
       className: '',
+      classId: '',
       url: '',
       qrDataUrl: '',
       error: ''
@@ -364,10 +400,10 @@
       if(!sharedStudentAccess || !tests.length) return;
       const matchedTest = tests.find(function(t){ return String(t.id) === String(sharedStudentTestId); }) || null;
       setStudentTests(matchedTest ? [matchedTest] : []);
-      if(matchedTest && matchedTest.class_id){
-        setStudentClassId(String(matchedTest.class_id));
-      } else if(sharedStudentClassId){
+      if(sharedStudentClassId){
         setStudentClassId(String(sharedStudentClassId));
+      } else if(matchedTest && matchedTest.class_id){
+        setStudentClassId(String(matchedTest.class_id));
       }
     }, [sharedStudentAccess, sharedStudentTestId, sharedStudentClassId, tests]);
     React.useEffect(function(){
@@ -439,7 +475,8 @@
         window.alert('そのテスト名は既に使われています。別の名前を指定してください');
         return;
       }
-      fetch('/api/tests',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({class_id:selectedClass?selectedClass.id:null, name:testName, public: testPublic, randomize: testRandomize, answer_mode: testAnswerMode, teacher_note: ''})}).then(r=>r.json()).then(n=>{ setTests(prev=>prev.concat({id:n.id, name:testName, class_id:selectedClass?selectedClass.id:null, public: testPublic?1:0, randomize: testRandomize?1:0, answer_mode: n && n.answer_mode ? n.answer_mode : testAnswerMode, archived: 0, teacher_note: ''})); setTestName(''); setTestPublic(false); setTestRandomize(false); setTestAnswerMode('deferred_summary'); });
+      const selectedClassIds = selectedClass ? [selectedClass.id] : [];
+      fetch('/api/tests',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({class_ids:selectedClassIds, class_id:selectedClass?selectedClass.id:null, name:testName, public: testPublic, randomize: testRandomize, answer_mode: testAnswerMode, teacher_note: ''})}).then(r=>r.json()).then(n=>{ setTests(prev=>prev.concat(Object.assign({id:n.id, name:testName, class_id:selectedClass?selectedClass.id:null, class_ids:selectedClassIds, assigned_classes:selectedClass ? [{ id: selectedClass.id, name: selectedClass.name }] : [], public: testPublic?1:0, randomize: testRandomize?1:0, answer_mode: n && n.answer_mode ? n.answer_mode : testAnswerMode, archived: 0, teacher_note: ''}, n || {}))); setTestName(''); setTestPublic(false); setTestRandomize(false); setTestAnswerMode('deferred_summary'); });
     }
     function startInlineTestRename(t){
       setEditingTestId(t.id);
@@ -669,12 +706,65 @@
       setQrShareModal({
         open: false,
         loading: false,
+        test: null,
         testName: '',
         className: '',
+        classId: '',
         url: '',
         qrDataUrl: '',
         error: ''
       });
+    }
+    async function openClassQrShareModal(test){
+      if(!test || !test.id) return;
+      if(!Number(testQuestionCounts[test.id] || 0)){
+        setMessage('問題が1問もないテストは共有QRを表示できません');
+        return;
+      }
+      if(!test.public){
+        setMessage('公開前のテストは共有QRを表示できません');
+        return;
+      }
+      const classIds = getTestClassIds(test);
+      if(!classIds.length){
+        setMessage('配布先クラスを設定すると共有URLを作成できます');
+        return;
+      }
+      const assigned = getAssignedClasses(test, classes);
+      const selectedClass = assigned[0] || classes.find(function(c){ return String(c.id) === String(classIds[0]); }) || null;
+      const selectedClassId = selectedClass ? selectedClass.id : classIds[0];
+      await updateQrShareForClass(test, selectedClassId, true);
+    }
+    async function updateQrShareForClass(test, classId, shouldOpen){
+      const classNameForTest = (classes.find(function(c){ return String(c.id) === String(classId); }) || {}).name || '未割当';
+      const url = buildStudentAccessUrl(test, classId);
+      setQrShareModal(function(prev){
+        return Object.assign({}, prev, {
+          open: shouldOpen || prev.open,
+          loading: true,
+          test: test,
+          testName: test.name || 'テスト',
+          className: classNameForTest,
+          classId: String(classId || ''),
+          url: url,
+          qrDataUrl: '',
+          error: ''
+        });
+      });
+      try{
+        const res = await fetch('/api/qr-code?text=' + encodeURIComponent(url));
+        const payload = await res.json();
+        if(!res.ok || !payload.dataUrl){
+          throw new Error(payload && payload.error ? payload.error : 'QRコード生成エラー');
+        }
+        setQrShareModal(function(prev){
+          return Object.assign({}, prev, { loading: false, qrDataUrl: payload.dataUrl, error: '' });
+        });
+      }catch(err){
+        setQrShareModal(function(prev){
+          return Object.assign({}, prev, { loading: false, qrDataUrl: '', error: err && err.message ? err.message : 'QRコード生成エラー' });
+        });
+      }
     }
     function copySharedUrl(url){
       copyTextToClipboard(url).then(function(){
@@ -691,6 +781,7 @@
         randomize: Object.prototype.hasOwnProperty.call(overrides || {}, 'randomize') ? overrides.randomize : (test.randomize || 0),
         answer_mode: Object.prototype.hasOwnProperty.call(overrides || {}, 'answer_mode') ? overrides.answer_mode : getAnswerModeValue(test),
         class_id: Object.prototype.hasOwnProperty.call(overrides || {}, 'class_id') ? overrides.class_id : (test.class_id || null),
+        class_ids: Object.prototype.hasOwnProperty.call(overrides || {}, 'class_ids') ? overrides.class_ids : getTestClassIds(test),
         archived: Object.prototype.hasOwnProperty.call(overrides || {}, 'archived') ? overrides.archived : (test.archived || 0),
         teacher_note: Object.prototype.hasOwnProperty.call(overrides || {}, 'teacher_note') ? overrides.teacher_note : (test.teacher_note || '')
       };
@@ -699,7 +790,7 @@
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify(payload)
       }).then(r=>r.json()).then(updated=>{
-        const merged = Object.assign({}, test, updated, { class_id: payload.class_id, archived: payload.archived, answer_mode: payload.answer_mode, teacher_note: payload.teacher_note });
+        const merged = Object.assign({}, test, updated, { archived: payload.archived, answer_mode: payload.answer_mode, teacher_note: payload.teacher_note });
         setTests(prev => prev.map(t => t.id===test.id ? merged : t));
         if(successMessage) setMessage(successMessage);
         return merged;
@@ -709,8 +800,43 @@
       });
     }
 
+    function openAssignmentModal(test){
+      setAssignmentModal({
+        open: true,
+        test: test,
+        classIds: getTestClassIds(test),
+        saving: false
+      });
+    }
+    function closeAssignmentModal(){
+      if(assignmentModal.saving) return;
+      setAssignmentModal({ open: false, test: null, classIds: [], saving: false });
+    }
+    function toggleAssignmentClass(classId){
+      setAssignmentModal(function(prev){
+        const id = String(classId);
+        const hasId = prev.classIds.indexOf(id) !== -1;
+        return Object.assign({}, prev, {
+          classIds: hasId ? prev.classIds.filter(function(x){ return x !== id; }) : prev.classIds.concat(id)
+        });
+      });
+    }
+    function saveAssignmentModal(){
+      const test = assignmentModal.test;
+      if(!test || assignmentModal.saving) return;
+      const classIds = assignmentModal.classIds.map(function(id){ return parseInt(id, 10); }).filter(Boolean);
+      setAssignmentModal(function(prev){ return Object.assign({}, prev, { saving: true }); });
+      updateTestRecord(test, { class_ids: classIds, class_id: classIds[0] || null }, '配布先の保存に失敗しました', '配布先を更新しました').then(function(updated){
+        if(updated){
+          setAssignmentModal({ open: false, test: null, classIds: [], saving: false });
+        } else {
+          setAssignmentModal(function(prev){ return Object.assign({}, prev, { saving: false }); });
+        }
+      });
+    }
+
     const classItems = classes.map(function(c){
-      const linkedTests = tests.filter(function(t){ return t.class_id === c.id; }).length;
+      const linkedTests = tests.filter(function(t){ return isTestAssignedToClass(t, c.id); }).length;
       return e('li', { key: c.id, className: 'task-list-row' },
         e('div', { className: 'task-list-row__body' },
           e('strong', null, c.name),
@@ -783,12 +909,12 @@
     const displayedTests = tests.filter(function(t){
       const matchesArchive = teacherArchiveView === 'archived' ? !!t.archived : !t.archived;
       const matchesQuery = !normalizedTeacherQuery || (t.name || '').toLowerCase().includes(normalizedTeacherQuery);
-      const matchesClass = !teacherFilterClassId || String(t.class_id || '') === String(teacherFilterClassId);
+      const matchesClass = !teacherFilterClassId || isTestAssignedToClass(t, teacherFilterClassId);
       return matchesArchive && matchesQuery && matchesClass;
     });
     const publicTestsCount = tests.filter(function(t){ return !!t.public; }).length;
     const draftTestsCount = tests.filter(function(t){ return !t.public; }).length;
-    const assignedTestsCount = tests.filter(function(t){ return !!t.class_id; }).length;
+    const assignedTestsCount = tests.filter(function(t){ return getTestClassIds(t).length > 0; }).length;
     const teacherFlowSteps = [
       {
         key: 'classroom',
@@ -955,6 +1081,10 @@
               const questionCount = testQuestionCounts[t.id] || 0;
               const classNameForTest = (classes.find(function(c){ return c.id === t.class_id; }) || {}).name || '未割当';
               const canShareTest = Number(questionCount) > 0 && !!t.public && !!t.class_id && !t.archived;
+              const assignedClassIds = getTestClassIds(t);
+              const assignedClasses = getAssignedClasses(t, classes);
+              const displayClassNameForTest = getAssignmentLabel(t, classes);
+              const canShareByAssignments = Number(questionCount) > 0 && !!t.public && assignedClassIds.length > 0 && !t.archived;
               const managementState = getTeacherTestManagementState(t, questionCount);
               const isDetailedCard = teacherTestViewMode === 'detailed' || !!expandedTeacherTests[t.id];
               const isRenamingTest = editingTestId === t.id;
@@ -965,7 +1095,7 @@
               const isTeacherNoteSaving = teacherNoteSavingId === t.id;
               return e('article', {
                 key: t.id,
-                draggable: !isRenamingTest,
+                draggable: false,
                 onDragStart: function(ev){ onDragStartTest(ev, t); },
                 className: cx('task-card', 'teacher-test-card', 'teacher-test-card--' + managementState.tone, isDetailedCard && 'is-detailed')
               },
@@ -1024,7 +1154,7 @@
                 e('div', { className: 'teacher-test-card__summary-grid' },
                   e('div', { className: 'teacher-test-meta' },
                     e('span', { className: 'teacher-test-meta__label' }, 'クラス'),
-                    e('strong', { className: 'teacher-test-meta__value' }, classNameForTest)
+                    e('strong', { className: 'teacher-test-meta__value' }, displayClassNameForTest)
                   ),
                   e('div', { className: cx('teacher-test-meta', questionCount === 0 && 'is-warning') },
                     e('span', { className: 'teacher-test-meta__label' }, '問題数'),
@@ -1034,7 +1164,8 @@
                 teacherNote ? e('p', { className: 'teacher-test-note-preview' }, teacherNote) : null,
                 e('div', { className: 'teacher-test-card__primary-actions' },
                   e('a', { href: '/create_test.html?class_id=' + encodeURIComponent(t.class_id || '') + '&name=' + encodeURIComponent(t.name || '') + '&test_id=' + encodeURIComponent(t.id), className: 'btn btn-small btn-primary' }, '問題管理'),
-                  e('button', { onClick: function(){ openQrShareModal(t); }, className: 'btn btn-small btn-secondary', type: 'button', disabled: !canShareTest }, '共有 QR'),
+                  e('button', { onClick: function(){ openAssignmentModal(t); }, className: 'btn btn-small btn-ghost', type: 'button' }, '配布先'),
+                  e('button', { onClick: function(){ openClassQrShareModal(t); }, className: 'btn btn-small btn-secondary', type: 'button', disabled: !canShareByAssignments }, '共有 QR'),
                   teacherTestViewMode === 'compact'
                     ? e('button', {
                         onClick: function(){ toggleTeacherTestExpanded(t.id); },
@@ -1045,6 +1176,11 @@
                     : null
                 ),
                 isDetailedCard ? e('div', { className: 'teacher-test-card__details' },
+                  e('div', { className: 'teacher-assignment-chips' },
+                    assignedClasses.length
+                      ? assignedClasses.map(function(c){ return e('span', { key: c.id, className: 'teacher-assignment-chip' }, c.name); })
+                      : e('span', { className: 'teacher-assignment-chip is-empty' }, '未割当')
+                  ),
                   e('div', { className: 'teacher-test-note-editor' },
                     e('div', { className: 'teacher-test-note-editor__header' },
                       e('label', { htmlFor: 'teacher-note-' + t.id }, '教師メモ'),
@@ -1105,7 +1241,7 @@
               )
             )
           ),
-          e('section', { className: 'task-section-card' },
+          null && e('section', { className: 'task-section-card' },
             e('div', { className: 'task-section-heading' },
               e('div', { 'data-title-icon': 'assign' },
                 e('h2', null, 'クラスへ割り当て'),
@@ -1132,6 +1268,33 @@
         )
       ),
 
+      assignmentModal.open ? e('div', { className: 'modal-backdrop', role: 'dialog', 'aria-modal': true },
+        e('div', { className: 'assignment-modal' },
+          e('div', { className: 'assignment-modal__header' },
+            e('div', null,
+              e('p', { className: 'eyebrow' }, '配布先'),
+              e('h2', null, assignmentModal.test ? assignmentModal.test.name : 'テスト')
+            ),
+            e('button', { className: 'btn btn-small btn-ghost', type: 'button', onClick: closeAssignmentModal, disabled: assignmentModal.saving }, '閉じる')
+          ),
+          e('div', { className: 'assignment-modal__list' },
+            classes.length
+              ? classes.map(function(c){
+                  const checked = assignmentModal.classIds.indexOf(String(c.id)) !== -1;
+                  return e('label', { key: c.id, className: checked ? 'assignment-class-option is-selected' : 'assignment-class-option' },
+                    e('input', { type: 'checkbox', checked: checked, onChange: function(){ toggleAssignmentClass(c.id); }, disabled: assignmentModal.saving }),
+                    e('span', null, c.name)
+                  );
+                })
+              : e('p', { className: 'section-note' }, '先にクラスを作成してください。')
+          ),
+          e('div', { className: 'assignment-modal__actions' },
+            e('span', { className: 'section-note' }, assignmentModal.classIds.length + 'クラスを選択中'),
+            e('button', { className: 'btn btn-primary', type: 'button', onClick: saveAssignmentModal, disabled: assignmentModal.saving }, assignmentModal.saving ? '保存中...' : '保存')
+          )
+        )
+      ) : null,
+
       renderModal(modalQuestions, {
         modalOpen: modalOpen,
         updateModalQuestionText: updateModalQuestionText,
@@ -1147,7 +1310,7 @@
     // Student UI functions
     // Start a test as the current (or newly created) student.
     function attemptStartTest(t){
-      const activeClassId = studentClassId || sharedStudentClassId || (t && t.class_id ? String(t.class_id) : '');
+      const activeClassId = studentClassId || sharedStudentClassId || (getTestClassIds(t)[0] || '');
       if(!studentName || !studentName.trim()){
         window.alert('名前を入力してください');
         return;
@@ -1346,7 +1509,7 @@
       setSummaryMeta(null);
       setStudent(null);
       setStudentName('');
-      setStudentClassId(sharedTest && sharedTest.class_id ? String(sharedTest.class_id) : (sharedStudentClassId || ''));
+      setStudentClassId(sharedStudentClassId || (getTestClassIds(sharedTest)[0] || ''));
       setStudentTests(sharedTest ? [sharedTest] : []);
       setCurrentTest(null);
       setCurrentQuestions([]);
@@ -1367,7 +1530,7 @@
       const sharedTest = sharedStudentAccess
         ? ((studentTests || []).find(function(t){ return String(t.id) === String(sharedStudentTestId); }) || tests.find(function(t){ return String(t.id) === String(sharedStudentTestId); }) || null)
         : null;
-      const resolvedClassId = studentClassId || (sharedTest && sharedTest.class_id ? String(sharedTest.class_id) : sharedStudentClassId);
+      const resolvedClassId = studentClassId || sharedStudentClassId || (getTestClassIds(sharedTest)[0] || '');
       const availableTests = sharedStudentAccess
         ? (sharedTest ? [sharedTest] : [])
         : (studentTests || []);
@@ -2139,6 +2302,17 @@
                       : e('div', { className: 'share-qr-modal__placeholder' }, qrShareModal.error || 'QRコードを表示できません'))
               ),
               e('div', { className: 'share-qr-modal__details' },
+                getAssignedClasses(qrShareModal.test, classes).length > 1 ? e('label', null,
+                  e('span', { className: 'student-field-label' }, '配布先クラス'),
+                  e('select', {
+                    value: qrShareModal.classId || '',
+                    onChange: function(ev){ updateQrShareForClass(qrShareModal.test, ev.target.value, false); },
+                    disabled: qrShareModal.loading,
+                    'aria-label': '配布先クラス'
+                  }, getAssignedClasses(qrShareModal.test, classes).map(function(c){
+                    return e('option', { key: c.id, value: String(c.id) }, c.name);
+                  }))
+                ) : null,
                 e('label', null,
                   e('span', { className: 'student-field-label' }, 'アクセスURL'),
                   e('input', { value: qrShareModal.url, readOnly: true, 'aria-label': 'アクセスURL' })
