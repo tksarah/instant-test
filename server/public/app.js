@@ -1013,7 +1013,7 @@
             ),
             classItems.length ? e('ul', { className: 'task-list' }, classItems) : e('div', { className: 'task-empty' }, 'クラスがまだありません')
           ),
-          e('section', { className: 'task-section-card' },
+          e('section', { className: 'task-section-card teacher-tests-card' },
             e('div', { className: 'task-section-heading' },
               e('div', { 'data-title-icon': 'list' },
                 e('h2', null, 'テストの管理')
@@ -1273,7 +1273,8 @@
           e('div', { className: 'assignment-modal__header' },
             e('div', null,
               e('p', { className: 'eyebrow' }, '配布先'),
-              e('h2', null, assignmentModal.test ? assignmentModal.test.name : 'テスト')
+              e('h2', null, assignmentModal.test ? assignmentModal.test.name : 'テスト'),
+              e('p', { className: 'assignment-modal__description' }, 'このテストを受験できるクラスを選択します。複数のクラスを同時に選べます。')
             ),
             e('button', { className: 'btn btn-small btn-ghost', type: 'button', onClick: closeAssignmentModal, disabled: assignmentModal.saving }, '閉じる')
           ),
@@ -1283,7 +1284,11 @@
                   const checked = assignmentModal.classIds.indexOf(String(c.id)) !== -1;
                   return e('label', { key: c.id, className: checked ? 'assignment-class-option is-selected' : 'assignment-class-option' },
                     e('input', { type: 'checkbox', checked: checked, onChange: function(){ toggleAssignmentClass(c.id); }, disabled: assignmentModal.saving }),
-                    e('span', null, c.name)
+                    e('span', { className: 'assignment-class-option__check', 'aria-hidden': true }, checked ? '✓' : ''),
+                    e('span', { className: 'assignment-class-option__body' },
+                      e('strong', null, c.name),
+                      e('span', null, checked ? '配布先に含まれています' : 'クリックして配布先に追加')
+                    )
                   );
                 })
               : e('p', { className: 'section-note' }, '先にクラスを作成してください。')
