@@ -1149,7 +1149,7 @@
     const selectedArchivedClassCard = selectedScopeClassCard;
 
     function renderTeacherSetCard(){
-      return e('section', { className: 'task-section-card teacher-set-card' },
+      return e('section', { id: 'teacher-set-card', className: 'task-section-card teacher-set-card' },
         e('div', { className: 'task-section-heading' },
           e('div', { 'data-title-icon': 'assign' },
             e('h2', null, 'まとめ配布を作成'),
@@ -1247,6 +1247,12 @@
     const publicTestsCount = tests.filter(function(t){ return !!t.public; }).length;
     const draftTestsCount = tests.filter(function(t){ return !t.public; }).length;
     const assignedTestsCount = tests.filter(function(t){ return getTestClassIds(t).length > 0; }).length;
+    const readyToShareTestsCount = activeTests.filter(function(t){
+      return !!t.public && getTestClassIds(t).length > 0 && Number(testQuestionCounts[t.id] || 0) > 0;
+    }).length;
+    const attentionTestsCount = activeTests.filter(function(t){
+      return !t.public || getTestClassIds(t).length === 0 || Number(testQuestionCounts[t.id] || 0) === 0;
+    }).length;
     const teacherFlowSteps = [
       {
         key: 'classroom',
@@ -1272,12 +1278,16 @@
       }
     ];
 
-    const teacherNode = e('section', { className: 'task-page' },
-      e('div', { className: 'task-page-hero compact teacher-page-hero' },
+    const teacherNode = e('section', { className: 'task-page teacher-dashboard-page' },
+      e('div', { className: 'task-page-hero compact teacher-page-hero teacher-operations-header' },
         e('div', { className: 'teacher-page-hero__intro' },
           e('p', { className: 'eyebrow' }, '教員メニュー'),
           e('h1', null, 'テスト準備ダッシュボード'),
           e('p', { className: 'lead' }, '準備フローを参考に、テストの準備・配布を行います。')
+        ),
+        e('div', { className: 'teacher-operations-header__actions' },
+          e('a', { href: '#teacher-tests-card', className: 'btn btn-primary' }, 'テスト運用へ'),
+          e('a', { href: '#teacher-create-card', className: 'btn btn-ghost' }, '新規作成')
         ),
         e('div', { className: 'teacher-page-flow' },
           e('div', { className: 'teacher-page-flow__header' },
@@ -1320,6 +1330,16 @@
           e('strong', { className: 'task-stat-card__value' }, String(assignedTestsCount)),
           e('span', { className: 'task-stat-card__note' }, '共有 QR を出せる状態')
         ),
+        e('article', { key: 'teacher-stat-ready', className: 'task-stat-card teacher-stat-card--ready' },
+          e('span', { className: 'task-stat-card__label' }, '共有可能'),
+          e('strong', { className: 'task-stat-card__value' }, String(readyToShareTestsCount)),
+          e('span', { className: 'task-stat-card__note' }, '公開・配布先・問題が揃ったテスト')
+        ),
+        e('article', { key: 'teacher-stat-attention', className: 'task-stat-card teacher-stat-card--attention' },
+          e('span', { className: 'task-stat-card__label' }, '要確認'),
+          e('strong', { className: 'task-stat-card__value' }, String(attentionTestsCount)),
+          e('span', { className: 'task-stat-card__note' }, '公開前・未配布・問題未作成')
+        ),
         e('article', { key: 'teacher-stat-archived', className: 'task-stat-card' },
           e('span', { className: 'task-stat-card__label' }, 'アーカイブ済み'),
           e('strong', { className: 'task-stat-card__value' }, String(archivedTestsCount)),
@@ -1329,7 +1349,7 @@
       initialDataLoading ? e('div', { className: 'teacher-status-strip', role: 'status' }, 'クラスとテストの一覧を読み込んでいます。') : null,
       e('div', { className: 'teacher-workspace-grid' },
         e('section', { className: 'teacher-workspace-main' },
-          e('section', { className: 'task-section-card teacher-class-card' },
+          e('section', { id: 'teacher-class-card', className: 'task-section-card teacher-class-card' },
             e('div', { className: 'task-section-heading' },
               e('div', { 'data-title-icon': 'classroom' },
                 e('h2', null, 'クラス管理'),
@@ -1345,7 +1365,7 @@
             ),
             classItems.length ? e('ul', { className: 'task-list' }, classItems) : e('div', { className: 'task-empty' }, 'クラスがまだありません')
           ),
-          e('section', { className: 'task-section-card teacher-tests-card' },
+          e('section', { id: 'teacher-tests-card', className: 'task-section-card teacher-tests-card' },
             e('div', { className: 'task-section-heading' },
               e('div', { 'data-title-icon': 'list' },
                 e('h2', null, 'テストの管理')
@@ -1472,7 +1492,17 @@
                 key: t.id,
                 draggable: false,
                 onDragStart: function(ev){ onDragStartTest(ev, t); },
-                className: cx('teacher-test-row', 'teacher-test-card', 'teacher-test-card--' + managementState.tone, isDetailedCard && 'is-detailed')
+                className: cx(
+                  'teacher-test-row',
+                  'teacher-test-card',
+                  'teacher-test-card--' + managementState.tone,
+                  isDetailedCard && 'is-detailed',
+                  questionCount === 0 && 'needs-questions',
+                  assignedClassIds.length === 0 && 'is-unassigned',
+                  canShareByAssignments && 'is-share-ready',
+                  !!t.public && 'is-public',
+                  !t.public && 'is-draft'
+                )
               },
                 e('div', { className: 'teacher-test-row__main' },
                   e('div', { className: 'teacher-test-card__title-block' },
@@ -1545,9 +1575,10 @@
                   t.archived ? e('button', { onClick: function(){ toggleTestArchived(t); }, className: 'btn btn-small btn-ghost teacher-test-action teacher-test-action--secondary', type: 'button' }, '復元') : null,
                   e('button', {
                     onClick: function(){ toggleTeacherTestExpanded(t.id); },
-                    className: 'btn btn-small btn-ghost teacher-test-action teacher-test-action--secondary',
+                    className: cx('btn btn-small btn-ghost teacher-test-action teacher-test-action--secondary teacher-test-action--expand', isDetailedCard && 'is-active'),
                     type: 'button',
-                    'aria-expanded': isDetailedCard
+                    'aria-expanded': isDetailedCard,
+                    'aria-pressed': isDetailedCard
                   }, isDetailedCard ? '詳細を隠す' : '詳細')
                 ),
                 isDetailedCard ? e('div', { className: 'teacher-test-card__details' },
@@ -1594,7 +1625,7 @@
           renderTeacherSetCard()
         ),
         e('aside', { className: 'teacher-workspace-side' },
-          e('section', { className: 'task-section-card teacher-create-card' },
+          e('section', { id: 'teacher-create-card', className: 'task-section-card teacher-create-card' },
             e('div', { className: 'task-section-heading' },
               e('div', { 'data-title-icon': 'compose' },
                 e('h2', null, 'テストを作成'),
