@@ -5,7 +5,8 @@
   function createEmptyChoice(){ return { text: '', is_correct: false }; }
   function nextFrame(fn){ window.requestAnimationFrame(fn); }
 
-  const state = { questions: [], editingIndex: -1, editorChoices: [], page: 0 };
+  const state = { questions: [], editingIndex: -1, editorChoices: [], page: 0, selectedQuestionIndexes: new Set() };
+  let pendingQuestionDeletion = null;
   let isDirty = false;
   let lastSavedClassId = '';
   let lastSavedQuestions = [];
@@ -352,21 +353,100 @@
     renderQuestionsList();
   }
 
+  function updateCreateModeUI(){
+    const checked = document.querySelector('input[name="create-mode"]:checked');
+    const mode = checked ? checked.value : 'manual';
+    const manual = el('manual-editor');
+    const auto = el('auto-create-section');
+    if(mode === 'auto'){
+      if(manual) manual.style.display = 'none';
+      if(auto) auto.style.display = 'block';
+      const chip = el('editor-mode-chip'); if(chip) chip.textContent = '自動作成モード';
+    } else {
+      if(manual) manual.style.display = '';
+      if(auto) auto.style.display = 'none';
+      syncEditorMeta();
+    }
+  }
+
+  function switchToManualMode(){
+    const manualRadio = document.querySelector('input[name="create-mode"][value="manual"]');
+    if(manualRadio) manualRadio.checked = true;
+    updateCreateModeUI();
+  }
+
+  function pruneSelectedQuestionIndexes(){
+    state.selectedQuestionIndexes.forEach(function(index){
+      if(index < 0 || index >= state.questions.length){
+        state.selectedQuestionIndexes.delete(index);
+      }
+    });
+  }
+
   function renderQuestionsList(){
     const container = el('questions-list'); container.innerHTML = '';
     syncEditorMeta();
-    if(!state.questions || state.questions.length === 0){ container.textContent = '問題はまだありません'; return; }
+    if(!state.questions || state.questions.length === 0){
+      state.selectedQuestionIndexes.clear();
+      container.textContent = '問題はまだありません';
+      return;
+    }
+    pruneSelectedQuestionIndexes();
 
     const pageCount = Math.max(1, Math.ceil(state.questions.length / PAGE_SIZE));
     if(state.page >= pageCount) state.page = Math.max(0, pageCount - 1);
     const start = state.page * PAGE_SIZE;
     const end = Math.min(start + PAGE_SIZE, state.questions.length);
+    const selectedCount = state.selectedQuestionIndexes.size;
+
+    const bulkActions = document.createElement('div');
+    bulkActions.className = 'task-inline-actions';
+    bulkActions.style.justifyContent = 'space-between';
+    bulkActions.style.marginBottom = '10px';
+    const selectionLabel = document.createElement('span');
+    selectionLabel.className = 'task-helper-text';
+    selectionLabel.textContent = selectedCount ? (selectedCount + '件選択中') : '削除する問題を選択できます';
+    const bulkButtons = document.createElement('div');
+    bulkButtons.className = 'task-inline-actions';
+    const btnDeleteSelected = document.createElement('button');
+    btnDeleteSelected.className = 'btn btn-small btn-ghost';
+    btnDeleteSelected.type = 'button';
+    btnDeleteSelected.textContent = '選択した問題を削除';
+    btnDeleteSelected.disabled = selectedCount === 0;
+    btnDeleteSelected.addEventListener('click', deleteSelectedQuestions);
+    const btnDeleteAll = document.createElement('button');
+    btnDeleteAll.className = 'btn btn-small btn-ghost';
+    btnDeleteAll.type = 'button';
+    btnDeleteAll.textContent = 'すべて削除';
+    btnDeleteAll.addEventListener('click', deleteAllQuestions);
+    bulkButtons.appendChild(btnDeleteSelected);
+    bulkButtons.appendChild(btnDeleteAll);
+    bulkActions.appendChild(selectionLabel);
+    bulkActions.appendChild(bulkButtons);
+    container.appendChild(bulkActions);
 
     const ol = document.createElement('ol');
     for(let i = start; i < end; i++){
       const q = state.questions[i];
       const idx = i; // global index in state.questions
       const li = document.createElement('li');
+      const selectLabel = document.createElement('label');
+      selectLabel.className = 'task-toggle compact';
+      selectLabel.style.width = 'fit-content';
+      const selectInput = document.createElement('input');
+      selectInput.type = 'checkbox';
+      selectInput.checked = state.selectedQuestionIndexes.has(idx);
+      selectInput.setAttribute('aria-label', '問題 ' + (idx + 1) + ' を選択');
+      selectInput.addEventListener('change', function(){
+        if(selectInput.checked){
+          state.selectedQuestionIndexes.add(idx);
+        } else {
+          state.selectedQuestionIndexes.delete(idx);
+        }
+        renderQuestionsList();
+      });
+      selectLabel.appendChild(selectInput);
+      selectLabel.appendChild(document.createTextNode(' 選択'));
       const qdiv = document.createElement('div'); qdiv.className = 'question-list-card__title';
       // 表示は先頭20文字のみ（末尾に省略記号）。フルテキストはツールチップとクリックで確認可能。
       const maxLen = 15;
@@ -385,7 +465,7 @@
       btnDup.addEventListener('click', function(){ duplicateQuestion(idx); });
       const actions = document.createElement('div'); actions.className = 'task-inline-actions';
       actions.appendChild(btnEdit); actions.appendChild(btnDup); actions.appendChild(btnDel);
-      li.appendChild(qdiv); li.appendChild(meta); li.appendChild(actions); ol.appendChild(li);
+      li.appendChild(selectLabel); li.appendChild(qdiv); li.appendChild(meta); li.appendChild(actions); ol.appendChild(li);
     }
     container.appendChild(ol);
 
@@ -414,6 +494,15 @@
 
   function removeQuestionAtIndex(index){
     state.questions.splice(index, 1);
+    const nextSelected = new Set();
+    state.selectedQuestionIndexes.forEach(function(selectedIndex){
+      if(selectedIndex < index){
+        nextSelected.add(selectedIndex);
+      } else if(selectedIndex > index){
+        nextSelected.add(selectedIndex - 1);
+      }
+    });
+    state.selectedQuestionIndexes = nextSelected;
     if(state.editingIndex === index){
       resetEditor({ focusQuestion: false });
       return;
@@ -432,33 +521,114 @@
     return payload;
   }
 
+  async function deleteQuestionsByIndexes(indexes, message){
+    const targets = Array.from(new Set(indexes))
+      .filter(function(index){ return index >= 0 && index < state.questions.length; })
+      .sort(function(a, b){ return b - a; });
+    if(targets.length === 0) return;
+
+    setStatus('問題を削除しています...');
+    for(const index of targets){
+      const question = state.questions[index];
+      if(editingTestId && question && question.id){
+        await requestJson('/api/questions/' + encodeURIComponent(question.id), { method: 'DELETE' }, '問題の削除に失敗しました');
+        persistedDeletedQuestionIds.add(question.id);
+      }
+      removeQuestionAtIndex(index);
+    }
+    renderQuestionsList();
+    refreshDirtyState();
+    setStatus(message || (targets.length + '件の問題を削除しました'));
+  }
+
+  function showDeleteQuestionsModal(config){
+    const indexes = Array.from(new Set((config && config.indexes) || []))
+      .filter(function(index){ return index >= 0 && index < state.questions.length; });
+    if(indexes.length === 0) return;
+    pendingQuestionDeletion = {
+      indexes: indexes,
+      successMessage: config && config.successMessage ? config.successMessage : (indexes.length + '件の問題を削除しました')
+    };
+    const modal = el('delete-questions-modal');
+    const title = el('delete-questions-title');
+    const message = el('delete-questions-message');
+    const confirmButton = el('delete-questions-confirm');
+    if(title) title.textContent = config && config.title ? config.title : '問題を削除しますか？';
+    if(message) message.textContent = config && config.message ? config.message : '削除すると元に戻せません。';
+    if(confirmButton){
+      confirmButton.disabled = false;
+      confirmButton.textContent = '削除する';
+    }
+    if(modal) modal.style.display = 'flex';
+  }
+
+  function hideDeleteQuestionsModal(){
+    const modal = el('delete-questions-modal');
+    if(modal) modal.style.display = 'none';
+    pendingQuestionDeletion = null;
+    const confirmButton = el('delete-questions-confirm');
+    if(confirmButton){
+      confirmButton.disabled = false;
+      confirmButton.textContent = '削除する';
+    }
+  }
+
+  async function confirmPendingQuestionDeletion(){
+    if(!pendingQuestionDeletion) return;
+    const deletion = pendingQuestionDeletion;
+    const confirmButton = el('delete-questions-confirm');
+    if(confirmButton){
+      confirmButton.disabled = true;
+      confirmButton.textContent = '削除中...';
+    }
+    try{
+      await deleteQuestionsByIndexes(deletion.indexes, deletion.successMessage);
+      hideDeleteQuestionsModal();
+    }catch(error){
+      console.error(error);
+      hideDeleteQuestionsModal();
+      setStatus(error.message || '問題の削除に失敗しました', true);
+    }
+  }
+
   async function deleteQuestion(index){
     const question = state.questions[index];
     if(!question) return;
 
-    const confirmed = confirm('この問題を削除してよいですか？\n削除すると元に戻せません。');
-    if(!confirmed) return;
+    showDeleteQuestionsModal({
+      indexes: [index],
+      title: 'この問題を削除しますか？',
+      message: '削除すると元に戻せません。',
+      successMessage: '問題を削除しました'
+    });
+  }
 
-    if(editingTestId && question.id){
-      setStatus('問題を削除しています...');
-      try{
-        await requestJson('/api/questions/' + encodeURIComponent(question.id), { method: 'DELETE' }, '問題の削除に失敗しました');
-        persistedDeletedQuestionIds.add(question.id);
-        removeQuestionAtIndex(index);
-        renderQuestionsList();
-        refreshDirtyState();
-        setStatus('問題を削除しました');
-      }catch(error){
-        console.error(error);
-        setStatus(error.message || '問題の削除に失敗しました', true);
-      }
+  async function deleteSelectedQuestions(){
+    const indexes = Array.from(state.selectedQuestionIndexes);
+    if(indexes.length === 0){
+      setStatus('削除する問題を選択してください', true);
       return;
     }
+    showDeleteQuestionsModal({
+      indexes: indexes,
+      title: '選択した問題を削除しますか？',
+      message: indexes.length + '件の問題を削除します。削除すると元に戻せません。',
+      successMessage: indexes.length + '件の問題を削除しました'
+    });
+  }
 
-    removeQuestionAtIndex(index);
-    renderQuestionsList();
-    refreshDirtyState();
-    setStatus('問題を削除しました');
+  async function deleteAllQuestions(){
+    if(!state.questions.length){
+      setStatus('削除する問題がありません', true);
+      return;
+    }
+    const count = state.questions.length;
+    showDeleteQuestionsModal({
+      indexes: state.questions.map(function(_, index){ return index; }),
+      title: 'すべての問題を削除しますか？',
+      message: 'すべての問題（' + count + '件）を削除します。削除すると元に戻せません。',
+      successMessage: count + '件すべての問題を削除しました'
+    });
   }
 
   function duplicateQuestion(index){
@@ -486,6 +656,7 @@
 
   function editQuestion(index){
     const q = state.questions[index]; if(!q) return;
+    switchToManualMode();
     setEditorTitle('問題を編集'); setQuestionHtml(q.content_html || '', q.text || '');
     el('question-explanation').value = q.explanation || '';
     state.editorChoices = (q.choices || []).map(c => ({ id: c.id, text: c.text || '', is_correct: !!c.is_correct }));
@@ -599,6 +770,27 @@
         handleNavigate(href);
       });
     }
+  }
+
+  function setupDeleteQuestionsModal(){
+    const modal = el('delete-questions-modal');
+    const cancelButton = el('delete-questions-cancel');
+    const confirmButton = el('delete-questions-confirm');
+    if(cancelButton) cancelButton.addEventListener('click', hideDeleteQuestionsModal);
+    if(confirmButton) confirmButton.addEventListener('click', function(){ confirmPendingQuestionDeletion(); });
+    if(modal){
+      modal.addEventListener('click', function(event){
+        if(event.target === modal){
+          hideDeleteQuestionsModal();
+        }
+      });
+    }
+    document.addEventListener('keydown', function(event){
+      const isOpen = modal && modal.style.display !== 'none';
+      if(isOpen && event.key === 'Escape'){
+        hideDeleteQuestionsModal();
+      }
+    });
   }
 
   function focusEditor(){
@@ -750,6 +942,7 @@
 
     // setup unsaved handlers
     setupUnsavedHandlers();
+    setupDeleteQuestionsModal();
 
     // initialize editor and classes, and prefill from query params if provided
     resetEditor(); renderQuestionsList();
@@ -797,23 +990,6 @@
       markSavedState();
     })();
 
-    // 自動作成フォームの表示切替（UIのみ）
-    function updateCreateModeUI(){
-      const checked = document.querySelector('input[name="create-mode"]:checked');
-      const mode = checked ? checked.value : 'manual';
-      const manual = el('manual-editor');
-      const auto = el('auto-create-section');
-      if(mode === 'auto'){
-        if(manual) manual.style.display = 'none';
-        if(auto) auto.style.display = 'block';
-        const chip = el('editor-mode-chip'); if(chip) chip.textContent = '自動作成モード';
-      } else {
-        if(manual) manual.style.display = '';
-        if(auto) auto.style.display = 'none';
-        syncEditorMeta();
-      }
-    }
-
     document.querySelectorAll('input[name="create-mode"]').forEach(function(r){ r.addEventListener('change', updateCreateModeUI); });
     if(el('auto-choice-count')) el('auto-choice-count').addEventListener('change', syncAutoGenerationOptions);
 
@@ -853,9 +1029,6 @@
           state.questions = state.questions.concat(nextQuestions);
           renderQuestionsList();
           refreshDirtyState();
-          const manualRadio = document.querySelector('input[name="create-mode"][value="manual"]');
-          if(manualRadio) manualRadio.checked = true;
-          updateCreateModeUI();
           setStatus(nextQuestions.length + '問を自動生成しました。必要に応じて編集してから保存してください。');
         }catch(err){
           console.error(err);

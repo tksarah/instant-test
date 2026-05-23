@@ -173,9 +173,11 @@
               <button id="add-question" class="btn btn-primary" type="button">問題を追加</button>
               <button id="clear-editor" class="btn btn-ghost" type="button">エディタをクリア</button>
             </div>
-            <div style="display:flex; justify-content:flex-end; margin-top:12px;">
-              <button id="save-test" class="btn btn-primary" type="button">保存</button>
-            </div>
+          </div>
+        </section>
+        <section class="task-section-card">
+          <div style="display:flex; justify-content:flex-end;">
+            <button id="save-test" class="btn btn-primary" type="button">保存</button>
           </div>
         </section>
       </div>
@@ -210,6 +212,16 @@
       <p>問題の追加や削除、編集中の内容がある場合は、先に内容を反映してから「保存」ボタンを押してください。</p>
       <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:12px;">
         <button id="unsaved-ok" class="btn btn-primary">閉じる</button>
+      </div>
+    </div>
+  </div>
+  <div id="delete-questions-modal" class="modal modal-centered" style="display:none;">
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="delete-questions-title">
+      <h3 id="delete-questions-title">問題を削除しますか？</h3>
+      <p id="delete-questions-message">削除すると元に戻せません。</p>
+      <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:12px;">
+        <button id="delete-questions-cancel" class="btn btn-ghost" type="button">キャンセル</button>
+        <button id="delete-questions-confirm" class="btn btn-primary" type="button">削除する</button>
       </div>
     </div>
   </div>

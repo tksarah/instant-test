@@ -348,6 +348,25 @@
       qrDataUrl: '',
       error: ''
     });
+    const [testDeleteModal, setTestDeleteModal] = React.useState({
+      open: false,
+      test: null,
+      cascade: false,
+      loading: false,
+      dependencyInfo: null
+    });
+    const [classDeleteModal, setClassDeleteModal] = React.useState({
+      open: false,
+      classItem: null,
+      cascade: false,
+      loading: false,
+      dependencyInfo: null
+    });
+    const [testSetDeleteModal, setTestSetDeleteModal] = React.useState({
+      open: false,
+      testSet: null,
+      loading: false
+    });
 
     // Student states
     const [studentName, setStudentName] = React.useState('');
@@ -471,6 +490,36 @@
         setTimeout(function(){ var mc = document.getElementById('modal-content'); if(mc) mc.focus(); }, 0);
       }
     }, [modalOpen]);
+    React.useEffect(function(){
+      if(!testDeleteModal.open) return;
+      function onKeyDown(event){
+        if(event.key === 'Escape' && !testDeleteModal.loading){
+          closeTestDeleteModal();
+        }
+      }
+      document.addEventListener('keydown', onKeyDown);
+      return function(){ document.removeEventListener('keydown', onKeyDown); };
+    }, [testDeleteModal.open, testDeleteModal.loading]);
+    React.useEffect(function(){
+      if(!classDeleteModal.open) return;
+      function onKeyDown(event){
+        if(event.key === 'Escape' && !classDeleteModal.loading){
+          closeClassDeleteModal();
+        }
+      }
+      document.addEventListener('keydown', onKeyDown);
+      return function(){ document.removeEventListener('keydown', onKeyDown); };
+    }, [classDeleteModal.open, classDeleteModal.loading]);
+    React.useEffect(function(){
+      if(!testSetDeleteModal.open) return;
+      function onKeyDown(event){
+        if(event.key === 'Escape' && !testSetDeleteModal.loading){
+          closeTestSetDeleteModal();
+        }
+      }
+      document.addEventListener('keydown', onKeyDown);
+      return function(){ document.removeEventListener('keydown', onKeyDown); };
+    }, [testSetDeleteModal.open, testSetDeleteModal.loading]);
     function createClass(){
       const name = (className || '').trim();
       if(!name){
@@ -500,28 +549,60 @@
         if(selectedClass && selectedClass.id === updated.id) setSelectedClass(updated);
       }).catch(()=> setMessage('クラス更新エラー'));
     }
-    function deleteClass(c){
-      if(!confirm('「' + c.name + '」を削除しますか？')) return;
-      fetch('/api/classes/'+c.id, { method: 'DELETE' }).then(async r=>{
+    function openClassDeleteModal(c){
+      if(!c) return;
+      setClassDeleteModal({
+        open: true,
+        classItem: c,
+        cascade: false,
+        loading: false,
+        dependencyInfo: null
+      });
+    }
+    function closeClassDeleteModal(){
+      setClassDeleteModal({
+        open: false,
+        classItem: null,
+        cascade: false,
+        loading: false,
+        dependencyInfo: null
+      });
+    }
+    function confirmClassDelete(){
+      const modal = classDeleteModal;
+      const c = modal.classItem;
+      if(!c || modal.loading) return;
+      setClassDeleteModal(function(prev){ return Object.assign({}, prev, { loading: true }); });
+      const url = '/api/classes/' + c.id + (modal.cascade ? '?cascade=1' : '');
+      fetch(url, { method: 'DELETE' }).then(async r=>{
         if(r.ok){
           setClasses(prev=> prev.filter(x=> x.id !== c.id));
           if(selectedClass && selectedClass.id === c.id) setSelectedClass(null);
-          setMessage('削除しました');
+          setMessage(modal.cascade ? '関連データを含め削除しました' : '削除しました');
+          closeClassDeleteModal();
         } else {
           const json = await r.json().catch(()=> ({ error: '削除失敗' }));
-          if(json && json.error === 'has_dependencies'){
-            const ok = confirm('このクラスには ' + json.tests + ' 件のテストと ' + json.students + ' 名の生徒がいます。関連データも削除しますか？（取り消せません）');
-            if(!ok) return;
-            fetch('/api/classes/'+c.id+'?cascade=1', { method: 'DELETE' }).then(r2=>{
-              if(r2.ok){
-                setClasses(prev=> prev.filter(x=> x.id !== c.id));
-                if(selectedClass && selectedClass.id === c.id) setSelectedClass(null);
-                setMessage('関連データを含め削除しました');
-              } else { setMessage('削除に失敗しました'); }
-            }).catch(()=> setMessage('削除エラー'));
+          if(json && json.error === 'has_dependencies' && !modal.cascade){
+            setClassDeleteModal(function(prev){
+              return Object.assign({}, prev, {
+                cascade: true,
+                loading: false,
+                dependencyInfo: {
+                  tests: json.tests || 0,
+                  students: json.students || 0
+                }
+              });
+            });
           } else { setMessage(json && json.error ? json.error : '削除エラー'); }
         }
-      }).catch(()=> setMessage('通信エラー'));
+      }).catch(()=> setMessage('通信エラー')).finally(function(){
+        setClassDeleteModal(function(prev){
+          return prev.open ? Object.assign({}, prev, { loading: false }) : prev;
+        });
+      });
+    }
+    function deleteClass(c){
+      openClassDeleteModal(c);
     }
     function createTest(){
       // バリデーション: 空文字チェック
@@ -610,13 +691,41 @@
         setTestSets(function(prev){ return prev.map(function(item){ return item.id === updated.id ? updated : item; }); });
       }).catch(function(){ setMessage('まとめ配布を更新できませんでした'); });
     }
-    function deleteTestSet(testSet){
-      if(!confirm('「' + testSet.name + '」を削除しますか？')) return;
+    function openTestSetDeleteModal(testSet){
+      if(!testSet) return;
+      setTestSetDeleteModal({
+        open: true,
+        testSet: testSet,
+        loading: false
+      });
+    }
+    function closeTestSetDeleteModal(){
+      setTestSetDeleteModal({
+        open: false,
+        testSet: null,
+        loading: false
+      });
+    }
+    function confirmTestSetDelete(){
+      const modal = testSetDeleteModal;
+      const testSet = modal.testSet;
+      if(!testSet || modal.loading) return;
+      setTestSetDeleteModal(function(prev){ return Object.assign({}, prev, { loading: true }); });
       fetch('/api/test-sets/' + encodeURIComponent(testSet.id), { method: 'DELETE' }).then(function(r){
         if(!r.ok) throw new Error('delete_failed');
         setTestSets(function(prev){ return prev.filter(function(item){ return item.id !== testSet.id; }); });
         setMessage('まとめ配布を削除しました');
-      }).catch(function(){ setMessage('まとめ配布を削除できませんでした'); });
+        closeTestSetDeleteModal();
+      }).catch(function(){
+        setMessage('まとめ配布を削除できませんでした');
+      }).finally(function(){
+        setTestSetDeleteModal(function(prev){
+          return prev.open ? Object.assign({}, prev, { loading: false }) : prev;
+        });
+      });
+    }
+    function deleteTestSet(testSet){
+      openTestSetDeleteModal(testSet);
     }
     function startInlineTestRename(t){
       setEditingTestId(t.id);
@@ -652,24 +761,59 @@
       });
     }
 
-    function deleteTest(t){
-      if(!confirm('「' + t.name + '」を削除しますか？')) return;
-      fetch('/api/tests/'+t.id, { method: 'DELETE' }).then(async r=>{
+    function openTestDeleteModal(t){
+      if(!t) return;
+      setTestDeleteModal({
+        open: true,
+        test: t,
+        cascade: false,
+        loading: false,
+        dependencyInfo: null
+      });
+    }
+    function closeTestDeleteModal(){
+      setTestDeleteModal({
+        open: false,
+        test: null,
+        cascade: false,
+        loading: false,
+        dependencyInfo: null
+      });
+    }
+    function confirmTestDelete(){
+      const modal = testDeleteModal;
+      const t = modal.test;
+      if(!t || modal.loading) return;
+      setTestDeleteModal(function(prev){ return Object.assign({}, prev, { loading: true }); });
+      const url = '/api/tests/' + t.id + (modal.cascade ? '?cascade=1' : '');
+      fetch(url, { method: 'DELETE' }).then(async r=>{
         if(r.ok){
           setTests(prev=> prev.filter(x=> x.id !== t.id));
-          setMessage('削除しました');
+          setMessage(modal.cascade ? '関連データを含め削除しました' : '削除しました');
+          closeTestDeleteModal();
         } else {
           const json = await r.json().catch(()=> ({ error: '削除失敗' }));
-          if(json && json.error === 'has_dependencies'){
-            const ok = confirm('このテストには ' + json.questions + ' 件の問題と ' + json.answers + ' 件の回答があります。関連データも削除しますか？（取り消せません）');
-            if(!ok) return;
-            fetch('/api/tests/'+t.id+'?cascade=1', { method: 'DELETE' }).then(r2=>{
-              if(r2.ok){ setTests(prev=> prev.filter(x=> x.id !== t.id)); setMessage('関連データを含め削除しました'); }
-              else { setMessage('削除に失敗しました'); }
-            }).catch(()=> setMessage('削除エラー'));
+          if(json && json.error === 'has_dependencies' && !modal.cascade){
+            setTestDeleteModal(function(prev){
+              return Object.assign({}, prev, {
+                cascade: true,
+                loading: false,
+                dependencyInfo: {
+                  questions: json.questions || 0,
+                  answers: json.answers || 0
+                }
+              });
+            });
           } else { setMessage(json && json.error ? json.error : '削除エラー'); }
         }
-      }).catch(()=> setMessage('通信エラー'));
+      }).catch(()=> setMessage('通信エラー')).finally(function(){
+        setTestDeleteModal(function(prev){
+          return prev.open ? Object.assign({}, prev, { loading: false }) : prev;
+        });
+      });
+    }
+    function deleteTest(t){
+      openTestDeleteModal(t);
     }
     function fetchQuestions(testId){ if(!testId) return Promise.resolve([]); return fetch('/api/tests/'+testId+'/questions').then(r=>r.json()).then(j=>{ setQuestions(j); return j; }).catch(()=>{ setMessage('問題取得エラー'); return []; }); }
 
@@ -1674,6 +1818,71 @@
           )
         )
       ),
+
+      testDeleteModal.open ? e('div', {
+        className: 'modal modal-centered',
+        role: 'dialog',
+        'aria-modal': true,
+        'aria-labelledby': 'test-delete-modal-title',
+        style: { background: 'rgba(9,16,26,0.56)' },
+        onClick: function(event){ if(event.target === event.currentTarget && !testDeleteModal.loading) closeTestDeleteModal(); }
+      },
+        e('div', { className: 'modal-panel', onClick: function(event){ event.stopPropagation(); } },
+          e('h3', { id: 'test-delete-modal-title' }, testDeleteModal.cascade ? '関連データも削除しますか？' : 'テストを削除しますか？'),
+          e('p', null,
+            testDeleteModal.cascade
+              ? 'このテストには ' + ((testDeleteModal.dependencyInfo && testDeleteModal.dependencyInfo.questions) || 0) + ' 件の問題と ' + ((testDeleteModal.dependencyInfo && testDeleteModal.dependencyInfo.answers) || 0) + ' 件の回答があります。関連データも削除します。'
+              : '「' + ((testDeleteModal.test && testDeleteModal.test.name) || 'テスト') + '」を削除します。'
+          ),
+          e('p', { className: 'task-helper-text', style: { marginTop: 8 } }, 'この操作は元に戻せません。'),
+          e('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 } },
+            e('button', { className: 'btn btn-ghost', type: 'button', onClick: closeTestDeleteModal, disabled: testDeleteModal.loading }, 'キャンセル'),
+            e('button', { className: 'btn btn-primary', type: 'button', onClick: confirmTestDelete, disabled: testDeleteModal.loading }, testDeleteModal.loading ? '削除中...' : '削除する')
+          )
+        )
+      ) : null,
+
+      classDeleteModal.open ? e('div', {
+        className: 'modal modal-centered',
+        role: 'dialog',
+        'aria-modal': true,
+        'aria-labelledby': 'class-delete-modal-title',
+        style: { background: 'rgba(9,16,26,0.56)' },
+        onClick: function(event){ if(event.target === event.currentTarget && !classDeleteModal.loading) closeClassDeleteModal(); }
+      },
+        e('div', { className: 'modal-panel', onClick: function(event){ event.stopPropagation(); } },
+          e('h3', { id: 'class-delete-modal-title' }, classDeleteModal.cascade ? '関連データも削除しますか？' : 'クラスを削除しますか？'),
+          e('p', null,
+            classDeleteModal.cascade
+              ? 'このクラスには ' + ((classDeleteModal.dependencyInfo && classDeleteModal.dependencyInfo.tests) || 0) + ' 件のテストと ' + ((classDeleteModal.dependencyInfo && classDeleteModal.dependencyInfo.students) || 0) + ' 名の生徒がいます。関連データも削除します。'
+              : '「' + ((classDeleteModal.classItem && classDeleteModal.classItem.name) || 'クラス') + '」を削除します。'
+          ),
+          e('p', { className: 'task-helper-text', style: { marginTop: 8 } }, 'この操作は元に戻せません。'),
+          e('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 } },
+            e('button', { className: 'btn btn-ghost', type: 'button', onClick: closeClassDeleteModal, disabled: classDeleteModal.loading }, 'キャンセル'),
+            e('button', { className: 'btn btn-primary', type: 'button', onClick: confirmClassDelete, disabled: classDeleteModal.loading }, classDeleteModal.loading ? '削除中...' : '削除する')
+          )
+        )
+      ) : null,
+
+      testSetDeleteModal.open ? e('div', {
+        className: 'modal modal-centered',
+        role: 'dialog',
+        'aria-modal': true,
+        'aria-labelledby': 'test-set-delete-modal-title',
+        style: { background: 'rgba(9,16,26,0.56)' },
+        onClick: function(event){ if(event.target === event.currentTarget && !testSetDeleteModal.loading) closeTestSetDeleteModal(); }
+      },
+        e('div', { className: 'modal-panel', onClick: function(event){ event.stopPropagation(); } },
+          e('h3', { id: 'test-set-delete-modal-title' }, 'まとめ配布を削除しますか？'),
+          e('p', null, '「' + ((testSetDeleteModal.testSet && testSetDeleteModal.testSet.name) || 'まとめ配布') + '」を削除します。'),
+          e('p', { className: 'task-helper-text', style: { marginTop: 8 } }, 'この操作は元に戻せません。'),
+          e('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 } },
+            e('button', { className: 'btn btn-ghost', type: 'button', onClick: closeTestSetDeleteModal, disabled: testSetDeleteModal.loading }, 'キャンセル'),
+            e('button', { className: 'btn btn-primary', type: 'button', onClick: confirmTestSetDelete, disabled: testSetDeleteModal.loading }, testSetDeleteModal.loading ? '削除中...' : '削除する')
+          )
+        )
+      ) : null,
 
       assignmentModal.open ? e('div', { className: 'modal-backdrop', role: 'dialog', 'aria-modal': true },
         e('div', { className: 'assignment-modal' },

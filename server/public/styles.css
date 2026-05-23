@@ -436,6 +436,8 @@ legend{padding:0 8px;color:var(--text-strong);font-weight:700}
 #unsaved-modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:1200}
 #unsaved-modal::before{content:'';position:absolute;inset:0;background:rgba(9,16,26,0.5)}
 .modal{position:fixed;inset:0;display:flex;align-items:flex-start;justify-content:center;z-index:1200;padding:20px}
+.modal-centered{align-items:center}
+#delete-questions-modal{background:rgba(9,16,26,0.56)}
 .modal-backdrop{position:fixed;inset:0;background:rgba(9,16,26,0.56);z-index:1200}
 .modal-panel{position:relative;background:#fff;border-radius:14px;padding:18px;max-width:520px;width:92%;box-shadow:0 24px 48px rgba(15,23,42,0.16);z-index:1201}
 .modal-panel h3{margin:0 0 6px;font-size:18px}
