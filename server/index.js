@@ -2057,6 +2057,108 @@ app.post('/api/submit-answer', (req, res) => {
   });
 });
 
+// Update an already-submitted answer while an exam session is still in progress.
+app.put('/api/exam-sessions/:sessionId/answers/:questionId', (req, res) => {
+  const sessionId = parseInt(req.params.sessionId, 10);
+  const questionId = parseInt(req.params.questionId, 10);
+  const { student_id, test_id, choice_id, choice_ids } = req.body || {};
+  if(!sessionId) return res.status(400).json({ error: 'invalid_session_id' });
+  if(!questionId) return res.status(400).json({ error: 'invalid_question_id' });
+  if(!student_id || !test_id) return res.status(400).json({ error: 'student_id and test_id required' });
+
+  authorizeStudentTestAccess(req, res, test_id, student_id, ({ studentId: authorizedStudentId, test }) => {
+    (async () => {
+      const submitted = [];
+      if(Array.isArray(choice_ids)) submitted.push(...choice_ids.map(x => parseInt(x, 10)).filter(Boolean));
+      else if(choice_id) submitted.push(parseInt(choice_id, 10));
+      const uniqueSubmitted = Array.from(new Set(submitted));
+
+      try{
+        await dbRunAsync('BEGIN IMMEDIATE TRANSACTION');
+
+        const session = await dbGetAsync(
+          'SELECT id, student_id, test_id, status, finished_at FROM exam_sessions WHERE id=? AND student_id=? AND test_id=?',
+          [sessionId, authorizedStudentId, test_id]
+        );
+        if(!session){
+          await dbRunAsync('ROLLBACK');
+          return res.status(403).json({ error: 'forbidden' });
+        }
+        if(session.status === 'completed' || session.finished_at){
+          await dbRunAsync('ROLLBACK');
+          return res.status(409).json({ error: 'session_completed' });
+        }
+
+        const planRows = await ensureExamSessionQuestionPlan({ ...session, randomize: test && test.randomize });
+        const planRow = (planRows || []).find(row => Number(row.question_id) === Number(questionId));
+        if(!planRow){
+          await dbRunAsync('ROLLBACK');
+          return res.status(400).json({ error: 'question_not_in_session' });
+        }
+
+        const questionRow = await dbGetAsync('SELECT id, test_id FROM questions WHERE id=? AND test_id=?', [questionId, test_id]);
+        if(!questionRow){
+          await dbRunAsync('ROLLBACK');
+          return res.status(400).json({ error: 'invalid_question_id' });
+        }
+
+        const choiceRows = await dbAllAsync('SELECT id, is_correct FROM choices WHERE question_id=?', [questionId]);
+        const validChoiceIds = new Set((choiceRows || []).map(row => row.id));
+        const hasInvalidChoice = uniqueSubmitted.some(cid => !validChoiceIds.has(cid));
+        if(hasInvalidChoice){
+          await dbRunAsync('ROLLBACK');
+          return res.status(400).json({ error: 'invalid_choice_id' });
+        }
+
+        const correctIds = (choiceRows || []).filter(row => row.is_correct === 1 || row.is_correct === true).map(row => row.id);
+        let correct = false;
+        if(uniqueSubmitted.length > 0){
+          const submittedSet = new Set(uniqueSubmitted);
+          const correctSet = new Set(correctIds);
+          if(submittedSet.size === correctSet.size){
+            correct = [...submittedSet].every(id => correctSet.has(id));
+          }
+        }
+
+        await dbRunAsync(
+          'DELETE FROM student_answers WHERE session_id=? AND student_id=? AND test_id=? AND question_id=?',
+          [sessionId, authorizedStudentId, test_id, questionId]
+        );
+
+        if(uniqueSubmitted.length === 0){
+          await dbRunAsync(
+            'INSERT INTO student_answers (student_id, test_id, question_id, choice_id, correct, session_id) VALUES (?,?,?,?,?,?)',
+            [authorizedStudentId, test_id, questionId, null, correct ? 1 : 0, sessionId]
+          );
+        } else {
+          for(const submittedChoiceId of uniqueSubmitted){
+            await dbRunAsync(
+              'INSERT INTO student_answers (student_id, test_id, question_id, choice_id, correct, session_id) VALUES (?,?,?,?,?,?)',
+              [authorizedStudentId, test_id, questionId, submittedChoiceId, correct ? 1 : 0, sessionId]
+            );
+          }
+        }
+
+        const answeredAt = new Date().toISOString();
+        await dbRunAsync(
+          'UPDATE exam_session_questions SET answered_at=COALESCE(answered_at, ?) WHERE session_id=? AND question_id=?',
+          [answeredAt, sessionId, questionId]
+        );
+
+        await dbRunAsync('COMMIT');
+        return res.json({ accepted: true, question_id: questionId, choice_ids: uniqueSubmitted });
+      }catch(err){
+        try{
+          await dbRunAsync('ROLLBACK');
+        }catch(_rollbackErr){
+          // surface the original error
+        }
+        return res.status(500).json({ error: err.message });
+      }
+    })();
+  });
+});
+
 // Fetch student answers (filter by student_id and test_id)
 app.get('/api/studentAnswers', requireTeacher, (req, res) => {
   const { student_id, test_id } = req.query;

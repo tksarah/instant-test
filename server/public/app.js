@@ -399,6 +399,9 @@
     const [examCompletionMeta, setExamCompletionMeta] = React.useState(null);
     const [examCloseHintVisible, setExamCloseHintVisible] = React.useState(false);
     const [currentSessionId, setCurrentSessionId] = React.useState(null);
+    const [answersByQuestionId, setAnswersByQuestionId] = React.useState({});
+    const [examReviewVisible, setExamReviewVisible] = React.useState(false);
+    const [reviewingQuestionIndex, setReviewingQuestionIndex] = React.useState(null);
     // Reports (integrated) state
     const [reports, setReports] = React.useState([]);
     const [reportsLoading, setReportsLoading] = React.useState(false);
@@ -2005,6 +2008,9 @@
       setExamCloseHintVisible(false);
       setCurrentSelection([]);
       setLastResult(null);
+      setAnswersByQuestionId({});
+      setExamReviewVisible(false);
+      setReviewingQuestionIndex(null);
       // Prefer explicitStudent (passed from caller) otherwise fall back to state `student`.
       const useStudent = explicitStudent && explicitStudent.id ? explicitStudent : student;
       if(!useStudent || !useStudent.id){
@@ -2062,6 +2068,75 @@
       }
     }
 
+    function rememberCurrentSelection(questionId, selection){
+      if(!questionId) return;
+      const normalized = Array.isArray(selection) ? selection.slice() : [];
+      setAnswersByQuestionId(function(prev){
+        const next = Object.assign({}, prev);
+        next[questionId] = normalized;
+        return next;
+      });
+    }
+
+    function getStoredSelection(question){
+      if(!question) return [];
+      const stored = answersByQuestionId[question.id];
+      return Array.isArray(stored) ? stored : [];
+    }
+
+    function formatChoiceTextsForQuestion(question, selection){
+      const selectedIds = Array.isArray(selection) ? selection : [];
+      const choiceMap = {};
+      (question && question.choices || []).forEach(function(choice){
+        choiceMap[choice.id] = choice.text;
+      });
+      const texts = selectedIds.map(function(id){ return choiceMap[id] || String(id); }).filter(Boolean);
+      return formatAnswerTexts(texts, '未回答');
+    }
+
+    function openExamReview(){
+      setExamReviewVisible(true);
+      setReviewingQuestionIndex(null);
+      setLastResult(null);
+      setCurrentSelection([]);
+    }
+
+    function reviewExamQuestion(index){
+      const q = currentQuestions[index];
+      if(!q) return;
+      setReviewingQuestionIndex(index);
+      setCurrentIndex(index);
+      setCurrentSelection(getStoredSelection(q));
+      setLastResult(null);
+    }
+
+    async function saveReviewedAnswer(){
+      const q = currentQuestions[currentIndex];
+      if(!q || !currentSessionId || !student || !currentTest) return;
+      setStudentBusyLabel('回答を更新しています');
+      const payload = { student_id: student.id, test_id: currentTest.id };
+      if(q.type === 'multiple') payload.choice_ids = currentSelection;
+      else payload.choice_id = currentSelection && currentSelection[0] ? currentSelection[0] : null;
+      try{
+        const res = await fetch('/api/exam-sessions/' + encodeURIComponent(currentSessionId) + '/answers/' + encodeURIComponent(q.id), {
+          method: 'PUT',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify(payload)
+        });
+        const json = await res.json().catch(function(){ return {}; });
+        if(!res.ok || (json && json.error)){
+          setMessage(json && json.error ? json.error : '回答更新エラー');
+          return;
+        }
+        rememberCurrentSelection(q.id, currentSelection);
+        openExamReview();
+      }catch(_err){
+        setMessage('回答更新エラー');
+      }finally{
+        setStudentBusyLabel('');
+      }
+    }
+
     async function finalizeCurrentTest(){
       setStudentBusyLabel('結果をまとめています');
       try{
@@ -2076,8 +2151,14 @@
         if(isExamMode(currentTest)){
           setResultsSummary([]);
           setSummaryMeta(null);
-          setExamCompletionMeta({ testName: currentTest ? currentTest.name : '' });
+          setExamCompletionMeta({
+            testName: currentTest ? currentTest.name : '',
+            score: finishJson && typeof finishJson.score !== 'undefined' ? finishJson.score : 0,
+            maxScore: finishJson && typeof finishJson.max_score !== 'undefined' ? finishJson.max_score : 0
+          });
           setExamCloseHintVisible(false);
+          setExamReviewVisible(false);
+          setReviewingQuestionIndex(null);
           setMessage('試験終了');
           setCurrentTest(null);
           setCurrentSessionId(null);
@@ -2141,6 +2222,9 @@
           setMessage(j.error);
           return;
         }
+        if(isExamMode(currentTest)){
+          rememberCurrentSelection(q.id, currentSelection);
+        }
         if(isImmediateFeedbackMode(currentTest) && j && j.feedback){
           setLastResult({
             questionId: j.feedback.question_id || q.id,
@@ -2168,6 +2252,10 @@
         setCurrentIndex(currentIndex+1);
         return;
       }
+      if(isExamMode(currentTest)){
+        openExamReview();
+        return;
+      }
       finalizeCurrentTest();
     }
 
@@ -2182,6 +2270,9 @@
       setSummaryMeta(null);
       setExamCompletionMeta(null);
       setExamCloseHintVisible(false);
+      setAnswersByQuestionId({});
+      setExamReviewVisible(false);
+      setReviewingQuestionIndex(null);
       setStudent(null);
       setStudentName('');
       setStudentClassId(sharedStudentClassId || (getTestClassIds(sharedTest)[0] || getSetClassIds(sharedSet)[0] || ''));
@@ -2202,6 +2293,9 @@
       setSummaryMeta(null);
       setExamCompletionMeta(null);
       setExamCloseHintVisible(false);
+      setAnswersByQuestionId({});
+      setExamReviewVisible(false);
+      setReviewingQuestionIndex(null);
       setMessage('');
     }
 
@@ -2410,7 +2504,13 @@
               e('div', { className: 'student-preview-banner__body' },
                 e('p', { className: 'student-preview-kicker' }, '試験終了'),
                 e('h2', null, '試験終了'),
-                e('p', { className: 'student-preview-lead' }, ((examCompletionMeta && examCompletionMeta.testName) || 'このテスト') + ' の回答を送信しました。結果は先生からの案内を待ってください。'),
+                e('p', { className: 'student-preview-lead' }, ((examCompletionMeta && examCompletionMeta.testName) || 'このテスト') + ' の回答を送信しました。'),
+                e('div', { className: 'student-summary-stats' },
+                  e('article', { className: 'student-preview-stat' },
+                    e('span', { className: 'student-preview-stat__label' }, '合計得点'),
+                    e('strong', { className: 'student-preview-stat__value' }, ((examCompletionMeta && typeof examCompletionMeta.score !== 'undefined') ? examCompletionMeta.score : 0) + ' / ' + ((examCompletionMeta && typeof examCompletionMeta.maxScore !== 'undefined') ? examCompletionMeta.maxScore : 0) + '点')
+                  )
+                ),
                 examCloseHintVisible ? e('p', { className: 'student-action-hint', role: 'status' }, '閉じられない場合は、このタブを手動で閉じてください。') : null,
                 e('div', { className: 'hero-actions student-summary-hero__actions' },
                   e('button', { onClick: closeExamWindow, className: 'btn btn-primary', type: 'button' }, '閉じる')
@@ -2539,12 +2639,65 @@
           )
         );
       }
+      if(examReviewVisible && reviewingQuestionIndex === null){
+        const answeredTotal = currentQuestions.filter(function(question){
+          return getStoredSelection(question).length > 0;
+        }).length;
+        return e('div', { className: 'student-preview-shell' },
+          studentBusyLabel ? e('div', { className: 'student-status-strip', role: 'status' }, studentBusyLabel) : null,
+          e('section', { className: 'student-preview-banner student-preview-banner-loggedin' },
+            e('div', { className: 'student-preview-banner__body' },
+              e('p', { className: 'student-preview-kicker' }, '見直し'),
+              e('h2', null, (currentTest && currentTest.name ? currentTest.name : 'このテスト') + ' の回答確認'),
+              e('p', { className: 'student-preview-lead' }, '提出前に、全問題の回答内容を確認できます。必要な問題は見直してから提出してください。'),
+              e('div', { className: 'hero-actions student-summary-hero__actions' },
+                e('button', { onClick: finalizeCurrentTest, className: 'btn btn-primary', type: 'button', disabled: !!studentBusyLabel || answeredTotal < currentQuestions.length }, studentBusyLabel ? '提出中...' : '回答を提出')
+              )
+            )
+          ),
+          e('section', { className: 'student-preview-panel' },
+            e('div', { className: 'student-preview-panel__header' },
+              e('div', null,
+                e('p', { className: 'student-preview-kicker student-preview-kicker-muted' }, '回答リスト'),
+                e('h3', null, '全問題のチェック内容')
+              ),
+              e('span', { className: 'student-preview-caption' }, answeredTotal + ' / ' + currentQuestions.length + ' 問回答済み')
+            ),
+            e('div', { className: 'student-summary-list' }, currentQuestions.map(function(question, index){
+              const selection = getStoredSelection(question);
+              const points = Number(question.points || 0);
+              return e('article', { key: question.id || index, className: 'student-summary-card' },
+                e('div', { className: 'student-summary-card__header' },
+                  e('div', null,
+                    e('span', { className: 'student-summary-card__index' }, 'Q' + (index + 1)),
+                    renderRichQuestionContent(question, { className: 'rich-question-content student-summary-question', fallbackText: '（無題）' })
+                  ),
+                  e('span', { className: 'student-status-pill is-neutral' }, selection.length ? '回答済み' : '未回答')
+                ),
+                e('div', { className: 'student-summary-card__meta' },
+                  e('span', null, '配点 ' + points + ' 点')
+                ),
+                e('div', { className: 'student-summary-card__rows' },
+                  e('div', { className: 'student-summary-row' },
+                    e('span', { className: 'student-summary-row__label' }, '選択した回答'),
+                    e('strong', null, formatChoiceTextsForQuestion(question, selection))
+                  )
+                ),
+                e('div', { className: 'student-exam-actions' },
+                  e('button', { onClick: function(){ reviewExamQuestion(index); }, className: 'btn btn-ghost', type: 'button', disabled: !!studentBusyLabel }, '見直す')
+                )
+              );
+            }))
+          )
+        );
+      }
       // Test in progress
       const q = currentQuestions[currentIndex];
       if(!q) return e('div', { className: 'task-empty' }, '問題がありません');
 
       const showingFeedback = !!lastResult && isImmediateFeedbackMode(currentTest);
-      const answeredCount = currentIndex + (showingFeedback ? 1 : 0);
+      const reviewingExamQuestion = isExamMode(currentTest) && examReviewVisible && reviewingQuestionIndex !== null;
+      const answeredCount = reviewingExamQuestion ? currentQuestions.length : currentIndex + (showingFeedback ? 1 : 0);
       const progressPercent = currentQuestions.length ? Math.round(answeredCount / currentQuestions.length * 100) : 0;
 
       return e('div', { className: 'student-exam-shell' },
@@ -2610,10 +2763,12 @@
                 }))
               ),
           e('div', { className: 'student-exam-actions' },
-            showingFeedback
+            reviewingExamQuestion
+              ? e('button', { onClick: saveReviewedAnswer, className: 'btn btn-primary', type: 'button', disabled: !currentSelection.length || !!studentBusyLabel }, studentBusyLabel ? '更新中...' : '見直しリストへ戻る')
+              : showingFeedback
               ? e('button', { onClick: nextQuestion, className: 'btn btn-primary', type: 'button', disabled: !!studentBusyLabel }, currentIndex + 1 < currentQuestions.length ? '次の問題へ' : '振り返りを見る')
               : e('button', { onClick: submitCurrentAnswer, className: 'btn btn-primary', type: 'button', disabled: !currentSelection.length || !!studentBusyLabel }, studentBusyLabel ? '送信中...' : '回答を送信'),
-            showingFeedback ? e('span', { className: 'student-action-hint' }, '得点は最後の振り返りページで表示します。') : null
+            reviewingExamQuestion ? e('span', { className: 'student-action-hint' }, '正答や得点は提出後まで表示されません。') : (showingFeedback ? e('span', { className: 'student-action-hint' }, '得点は最後の振り返りページで表示します。') : null)
           )
         )
       );

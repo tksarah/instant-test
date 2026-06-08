@@ -146,8 +146,37 @@ function extractCookie(headers){
     assert(submit.status === 200, 'exam_mode submit failed');
     assert(!submit.body.feedback, 'exam_mode must not return feedback');
 
+    const invalidChoiceUpdate = await req('PUT', '/api/exam-sessions/' + encodeURIComponent(created.sessionId) + '/answers/' + encodeURIComponent(firstQuestion.id), {
+      student_id: created.studentId,
+      test_id: created.testId,
+      choice_id: 999999999
+    }, { Cookie: studentCookie });
+    assert(invalidChoiceUpdate.status === 400 && invalidChoiceUpdate.body && invalidChoiceUpdate.body.error === 'invalid_choice_id', 'invalid review choice should be rejected');
+
+    const outsideQuestionUpdate = await req('PUT', '/api/exam-sessions/' + encodeURIComponent(created.sessionId) + '/answers/' + encodeURIComponent(firstQuestion.id + 999999), {
+      student_id: created.studentId,
+      test_id: created.testId,
+      choice_id: firstQuestion.choices[0].id
+    }, { Cookie: studentCookie });
+    assert(outsideQuestionUpdate.status === 400 && outsideQuestionUpdate.body && outsideQuestionUpdate.body.error === 'question_not_in_session', 'question outside session should be rejected');
+
+    const changedAnswer = await req('PUT', '/api/exam-sessions/' + encodeURIComponent(created.sessionId) + '/answers/' + encodeURIComponent(firstQuestion.id), {
+      student_id: created.studentId,
+      test_id: created.testId,
+      choice_id: firstQuestion.choices[1].id
+    }, { Cookie: studentCookie });
+    assert(changedAnswer.status === 200 && changedAnswer.body && changedAnswer.body.accepted === true, 'exam_mode answer update failed');
+
     const finish = await req('PUT', '/api/exam-sessions/' + encodeURIComponent(created.sessionId) + '/finish', null, { Cookie: studentCookie });
     assert(finish.status === 200 && finish.body && finish.body.status === 'completed', 'exam_mode finish failed');
+    assert(finish.body.score === 0 && finish.body.max_score === 1, 'exam_mode finish should score the updated answer');
+
+    const completedUpdate = await req('PUT', '/api/exam-sessions/' + encodeURIComponent(created.sessionId) + '/answers/' + encodeURIComponent(firstQuestion.id), {
+      student_id: created.studentId,
+      test_id: created.testId,
+      choice_id: firstQuestion.choices[0].id
+    }, { Cookie: studentCookie });
+    assert(completedUpdate.status === 409 && completedUpdate.body && completedUpdate.body.error === 'session_completed', 'completed exam session should reject answer updates');
 
     const studentSummary = await req('GET', `/api/tests/${created.testId}/summary?student_id=${created.studentId}&session_id=${created.sessionId}`, null, { Cookie: studentCookie });
     assert(studentSummary.status === 403 && studentSummary.body && studentSummary.body.error === 'summary_unavailable_for_exam_mode', 'student summary must be forbidden in exam_mode');
