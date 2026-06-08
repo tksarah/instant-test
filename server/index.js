@@ -411,7 +411,9 @@ function ensureTeacherOwnsExamSession(req, res, sessionId, cb){
 }
 
 function normalizeAnswerMode(value){
-  return value === 'immediate_feedback' ? 'immediate_feedback' : 'deferred_summary';
+  if(value === 'immediate_feedback') return 'immediate_feedback';
+  if(value === 'exam_mode') return 'exam_mode';
+  return 'deferred_summary';
 }
 
 function normalizeTeacherNote(value){
@@ -975,7 +977,7 @@ function authorizeSummaryAccess(req, res, testId, studentId, sessionId, cb){
   if(!studentId) return res.status(400).json({ error: 'student_id required' });
   if(sessionId && !requestedSessionId) return res.status(400).json({ error: 'invalid_session_id' });
 
-  authorizeStudentTestAccess(req, res, testId, studentId, ({ studentId: authorizedStudentId, actor }) => {
+  authorizeStudentTestAccess(req, res, testId, studentId, ({ studentId: authorizedStudentId, test, actor }) => {
     (async () => {
       try{
         let resolvedSession = null;
@@ -987,6 +989,9 @@ function authorizeSummaryAccess(req, res, testId, studentId, sessionId, cb){
         }
 
         if(actor !== 'teacher'){
+          if(normalizeAnswerMode(test && test.answer_mode) === 'exam_mode'){
+            return res.status(403).json({ error: 'summary_unavailable_for_exam_mode' });
+          }
           if(!requestedSessionId) return res.status(400).json({ error: 'session_id required' });
           if(!resolvedSession || (resolvedSession.status !== 'completed' && !resolvedSession.finished_at)){
             return res.status(403).json({ error: 'summary_not_ready' });

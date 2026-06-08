@@ -127,23 +127,37 @@
     return Math.max(0, Math.min(100, Math.round(Number(earned || 0) / safeTotal * 100)));
   }
 
+  const ANSWER_MODE_OPTIONS = [
+    { value: 'immediate_feedback', label: '毎問フィードバック', description: '回答ごとに正解と解説を確認できます。' },
+    { value: 'deferred_summary', label: '最後にふりかえり', description: '最後にまとめて採点し、振り返りページで見直します。' },
+    { value: 'exam_mode', label: '試験モード', description: '全問回答後は試験終了だけを表示します。' }
+  ];
+
   function getAnswerModeValue(source){
     const value = source && typeof source === 'object' ? source.answer_mode : source;
-    return value === 'immediate_feedback' ? 'immediate_feedback' : 'deferred_summary';
+    if(value === 'immediate_feedback') return 'immediate_feedback';
+    if(value === 'exam_mode') return 'exam_mode';
+    return 'deferred_summary';
   }
 
   function isImmediateFeedbackMode(source){
     return getAnswerModeValue(source) === 'immediate_feedback';
   }
 
+  function isExamMode(source){
+    return getAnswerModeValue(source) === 'exam_mode';
+  }
+
   function getAnswerModeLabel(source){
-    return isImmediateFeedbackMode(source) ? '毎問フィードバック' : '最後にまとめて採点';
+    const value = getAnswerModeValue(source);
+    const option = ANSWER_MODE_OPTIONS.find(function(item){ return item.value === value; });
+    return option ? option.label : ANSWER_MODE_OPTIONS[1].label;
   }
 
   function getAnswerModeDescription(source){
-    return isImmediateFeedbackMode(source)
-      ? '回答ごとに正解と解説を確認できます。'
-      : '最後にまとめて採点し、振り返りページで見直します。';
+    const value = getAnswerModeValue(source);
+    const option = ANSWER_MODE_OPTIONS.find(function(item){ return item.value === value; });
+    return option ? option.description : ANSWER_MODE_OPTIONS[1].description;
   }
 
   function getTeacherTestManagementState(test, questionCount){
@@ -382,6 +396,8 @@
     const [lastResult, setLastResult] = React.useState(null);
     const [resultsSummary, setResultsSummary] = React.useState([]);
     const [summaryMeta, setSummaryMeta] = React.useState(null);
+    const [examCompletionMeta, setExamCompletionMeta] = React.useState(null);
+    const [examCloseHintVisible, setExamCloseHintVisible] = React.useState(false);
     const [currentSessionId, setCurrentSessionId] = React.useState(null);
     // Reports (integrated) state
     const [reports, setReports] = React.useState([]);
@@ -1755,7 +1771,17 @@
                   e('div', { className: 'task-card-controls teacher-test-card__controls' },
                     e('label', { className: 'task-toggle compact' }, e('input', { type: 'checkbox', checked: !!t.public, onChange: function(){ toggleTestPublic(t); }, disabled: !!t.archived }), e('span', null, '公開')),
                     e('label', { className: 'task-toggle compact' }, e('input', { type: 'checkbox', checked: !!t.randomize, onChange: function(){ updateTestRecord(t, { randomize: t.randomize ? 0 : 1 }, 'ランダム設定更新エラー'); } }), e('span', null, 'ランダム')),
-                    e('label', { className: 'task-toggle compact' }, e('input', { type: 'checkbox', checked: isImmediateFeedbackMode(t), onChange: function(){ updateTestRecord(t, { answer_mode: isImmediateFeedbackMode(t) ? 'deferred_summary' : 'immediate_feedback' }, '出題モード更新エラー'); } }), e('span', null, '毎問フィードバック'))
+                    e('label', { className: 'task-toggle compact' },
+                      e('span', null, '出題モード'),
+                      e('select', {
+                        value: getAnswerModeValue(t),
+                        onChange: function(ev){ updateTestRecord(t, { answer_mode: ev.target.value }, '出題モード更新エラー'); },
+                        disabled: !!t.archived,
+                        'aria-label': '出題モード'
+                      }, ANSWER_MODE_OPTIONS.map(function(option){
+                        return e('option', { key: option.value, value: option.value }, option.label);
+                      }))
+                    )
                   ),
                   e('p', { className: 'teacher-inline-note teacher-test-card__detail-note' }, managementState.detail),
                   e('div', { className: 'task-card-footer teacher-card-footer teacher-test-card__secondary-actions' },
@@ -1784,7 +1810,16 @@
               e('div', { className: 'task-toggle-row' },
                 e('label', { className: 'task-toggle' }, e('input', { type: 'checkbox', checked: testPublic, onChange: function(ev){ setTestPublic(!!ev.target.checked); } }), e('span', null, '公開する')),
                 e('label', { className: 'task-toggle' }, e('input', { type: 'checkbox', checked: testRandomize, onChange: function(ev){ setTestRandomize(!!ev.target.checked); } }), e('span', null, '問題順をランダム化')),
-                e('label', { className: 'task-toggle' }, e('input', { type: 'checkbox', checked: testAnswerMode === 'immediate_feedback', onChange: function(ev){ setTestAnswerMode(ev.target.checked ? 'immediate_feedback' : 'deferred_summary'); } }), e('span', null, '毎問フィードバック'))
+                e('label', { className: 'task-toggle' },
+                  e('span', null, '出題モード'),
+                  e('select', {
+                    value: testAnswerMode,
+                    onChange: function(ev){ setTestAnswerMode(getAnswerModeValue(ev.target.value)); },
+                    'aria-label': '出題モード'
+                  }, ANSWER_MODE_OPTIONS.map(function(option){
+                    return e('option', { key: option.value, value: option.value }, option.label);
+                  }))
+                )
               ),
               e('div', { className: 'task-inline-actions' },
                 e('button', { onClick: createTest, className: 'btn btn-primary', type: 'button' }, '作成'),
@@ -1965,6 +2000,9 @@
       setCurrentTest(t);
       setCurrentIndex(0);
       setResultsSummary([]);
+      setSummaryMeta(null);
+      setExamCompletionMeta(null);
+      setExamCloseHintVisible(false);
       setCurrentSelection([]);
       setLastResult(null);
       // Prefer explicitStudent (passed from caller) otherwise fall back to state `student`.
@@ -2034,6 +2072,16 @@
         const finishJson = await finishRes.json().catch(function(){ return {}; });
         if(!finishRes.ok){
           throw new Error(finishJson && finishJson.error ? finishJson.error : 'finish_failed');
+        }
+        if(isExamMode(currentTest)){
+          setResultsSummary([]);
+          setSummaryMeta(null);
+          setExamCompletionMeta({ testName: currentTest ? currentTest.name : '' });
+          setExamCloseHintVisible(false);
+          setMessage('試験終了');
+          setCurrentTest(null);
+          setCurrentSessionId(null);
+          return;
         }
         let summaryUrl = '/api/tests/'+currentTest.id+'/summary?student_id='+student.id;
         if(currentSessionId) summaryUrl += '&session_id=' + encodeURIComponent(currentSessionId);
@@ -2132,6 +2180,8 @@
         : null;
       setResultsSummary([]);
       setSummaryMeta(null);
+      setExamCompletionMeta(null);
+      setExamCloseHintVisible(false);
       setStudent(null);
       setStudentName('');
       setStudentClassId(sharedStudentClassId || (getTestClassIds(sharedTest)[0] || getSetClassIds(sharedSet)[0] || ''));
@@ -2150,7 +2200,23 @@
     function clearStudentSummary(){
       setResultsSummary([]);
       setSummaryMeta(null);
+      setExamCompletionMeta(null);
+      setExamCloseHintVisible(false);
       setMessage('');
+    }
+
+    function closeExamWindow(){
+      setExamCloseHintVisible(false);
+      try{
+        window.close();
+      }catch(_err){
+        // Some browsers block window.close() for tabs not opened by script.
+      }
+      window.setTimeout(function(){
+        if(!window.closed){
+          setExamCloseHintVisible(true);
+        }
+      }, 250);
     }
 
     function renderStudent(){
@@ -2173,6 +2239,7 @@
       const sharedAccessUnavailable = sharedStudentAccess && !sharedTest && !sharedSet;
       const sharedAccessNeedsClass = sharedStudentAccess && !resolvedClassId;
       const hasStudentName = !!(studentName && studentName.trim());
+      const examFinished = !currentTest && !!examCompletionMeta;
       const finished = !currentTest && resultsSummary && resultsSummary.length > 0 && summaryMeta;
       const correctCount = (resultsSummary || []).filter(function(item){ return !!item.correct; }).length;
       const totalQuestions = (resultsSummary || []).length;
@@ -2220,7 +2287,7 @@
             e('h3', null, t.name),
             e('p', { className: 'student-test-card__meta' }, classLabel + ' / ' + getAnswerModeDescription(t)),
             e('div', { className: cx('student-test-card__footer', sharedStudentAccess && 'student-test-card__footer-centered') },
-              e('span', { className: 'student-test-card__helper' }, hasStudentName ? (isImmediateFeedbackMode(t) ? '各問の正解と解説を確認しながら進められます。' : '最後に学習のふりかえりまで確認できます。') : '表示名を入力すると始められます。'),
+              e('span', { className: 'student-test-card__helper' }, hasStudentName ? getAnswerModeDescription(t) : '表示名を入力すると始められます。'),
               e('button', { onClick: function(){ handler(t); }, className: 'btn btn-primary', type: 'button', disabled: !hasStudentName || !!studentBusyLabel }, studentBusyLabel ? '準備中...' : buttonText)
             )
           );
@@ -2336,6 +2403,22 @@
         );
       }
       if(!currentTest){
+        if(examFinished){
+          return e('div', { className: 'student-preview-shell' },
+            studentBusyLabel ? e('div', { className: 'student-status-strip', role: 'status' }, studentBusyLabel) : null,
+            e('section', { className: 'student-preview-banner student-preview-banner-loggedin' },
+              e('div', { className: 'student-preview-banner__body' },
+                e('p', { className: 'student-preview-kicker' }, '試験終了'),
+                e('h2', null, '試験終了'),
+                e('p', { className: 'student-preview-lead' }, ((examCompletionMeta && examCompletionMeta.testName) || 'このテスト') + ' の回答を送信しました。結果は先生からの案内を待ってください。'),
+                examCloseHintVisible ? e('p', { className: 'student-action-hint', role: 'status' }, '閉じられない場合は、このタブを手動で閉じてください。') : null,
+                e('div', { className: 'hero-actions student-summary-hero__actions' },
+                  e('button', { onClick: closeExamWindow, className: 'btn btn-primary', type: 'button' }, '閉じる')
+                )
+              )
+            )
+          );
+        }
         if(finished){
           return e('div', { className: 'student-preview-shell' },
             studentBusyLabel ? e('div', { className: 'student-status-strip', role: 'status' }, studentBusyLabel) : null,
