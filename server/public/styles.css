@@ -333,6 +333,8 @@ legend{padding:0 8px;color:var(--text-strong);font-weight:700}
 }
 .task-toggle.compact{padding:8px 10px;background:#fff}
 .task-toggle input{width:auto;margin:0}
+.teacher-time-limit-control input[type="number"]{width:94px;min-width:94px}
+.teacher-time-limit-control input[disabled]{opacity:.58}
 
 .task-list{list-style:none;padding:0;margin:0;display:grid;gap:10px}
 .task-list-row{
@@ -811,6 +813,7 @@ legend{padding:0 8px;color:var(--text-strong);font-weight:700}
 .student-status-pill.is-neutral{background:#edf8f2;color:#245c52}
 .student-status-pill.is-correct{background:#eaf8ef;color:#1f7d46}
 .student-status-pill.is-incorrect{background:#fff0e7;color:#b55b17}
+.student-status-pill.is-warning{background:#fff0e7;color:#b55b17}
 
 .student-exam-shell,.student-exam-main{display:grid;gap:18px;width:100%;min-width:0}
 .student-exam-shell{grid-template-columns:minmax(0,1fr)}
@@ -839,6 +842,7 @@ legend{padding:0 8px;color:var(--text-strong);font-weight:700}
 .student-exam-progress-panel{background:linear-gradient(180deg,#fffef9,#f6fbf8)}
 .student-exam-progress-panel__header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
 .student-exam-progress-panel__header h3{font-size:24px;color:var(--color-main)}
+.student-exam-progress-panel__badges{display:flex;gap:8px;align-items:center;justify-content:flex-end;flex-wrap:wrap}
 .student-exam-progress-panel__lead{color:var(--text-muted)}
 .student-exam-progress-panel .student-exam-panel__meta{color:var(--text-muted)}
 .student-exam-progress-bar,

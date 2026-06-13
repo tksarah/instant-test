@@ -148,6 +148,38 @@
     return getAnswerModeValue(source) === 'exam_mode';
   }
 
+  function normalizeTimeLimitMinutes(value, answerMode){
+    if(getAnswerModeValue(answerMode) !== 'exam_mode') return null;
+    if(value === null || typeof value === 'undefined' || value === '') return null;
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  function getTimeLimitMinutes(source){
+    if(!isExamMode(source)) return null;
+    return normalizeTimeLimitMinutes(source && typeof source === 'object' ? source.time_limit_minutes : source, 'exam_mode');
+  }
+
+  function formatTimeLimitLabel(source){
+    const minutes = getTimeLimitMinutes(source);
+    return minutes ? ('制限 ' + minutes + '分') : '制限なし';
+  }
+
+  function formatRemainingTime(totalSeconds){
+    const safeSeconds = Math.max(0, parseInt(totalSeconds, 10) || 0);
+    const minutes = Math.floor(safeSeconds / 60);
+    const seconds = safeSeconds % 60;
+    return minutes + ':' + String(seconds).padStart(2, '0');
+  }
+
+  function computeRemainingSeconds(deadlineAt, serverOffsetMs){
+    if(!deadlineAt) return null;
+    const deadlineMs = Date.parse(deadlineAt);
+    if(!Number.isFinite(deadlineMs)) return null;
+    const remainingMs = deadlineMs - (Date.now() + (Number(serverOffsetMs) || 0));
+    return Math.max(0, Math.ceil(remainingMs / 1000));
+  }
+
   function getAnswerModeLabel(source){
     const value = getAnswerModeValue(source);
     const option = ANSWER_MODE_OPTIONS.find(function(item){ return item.value === value; });
@@ -320,6 +352,7 @@
     const [testPublic, setTestPublic] = React.useState(false);
     const [testRandomize, setTestRandomize] = React.useState(false);
     const [testAnswerMode, setTestAnswerMode] = React.useState('deferred_summary');
+    const [testTimeLimitMinutes, setTestTimeLimitMinutes] = React.useState('');
     const [setName, setSetName] = React.useState('');
     const [setDescription, setSetDescription] = React.useState('');
     const [setPublic, setSetPublic] = React.useState(false);
@@ -399,6 +432,9 @@
     const [examCompletionMeta, setExamCompletionMeta] = React.useState(null);
     const [examCloseHintVisible, setExamCloseHintVisible] = React.useState(false);
     const [currentSessionId, setCurrentSessionId] = React.useState(null);
+    const [examDeadlineAt, setExamDeadlineAt] = React.useState(null);
+    const [examServerOffsetMs, setExamServerOffsetMs] = React.useState(0);
+    const [examRemainingSeconds, setExamRemainingSeconds] = React.useState(null);
     const [answersByQuestionId, setAnswersByQuestionId] = React.useState({});
     const [examReviewVisible, setExamReviewVisible] = React.useState(false);
     const [reviewingQuestionIndex, setReviewingQuestionIndex] = React.useState(null);
@@ -424,6 +460,7 @@
     const [initialDataLoading, setInitialDataLoading] = React.useState(true);
     const [studentBusyLabel, setStudentBusyLabel] = React.useState('');
     const reportSummaryCacheRef = React.useRef({});
+    const examAutoSubmitRef = React.useRef(false);
     // selectedUserId / selectedUserSummary removed (side-card feature disabled)
     React.useEffect(()=>{
       setInitialDataLoading(true);
@@ -509,6 +546,23 @@
         setTimeout(function(){ var mc = document.getElementById('modal-content'); if(mc) mc.focus(); }, 0);
       }
     }, [modalOpen]);
+    React.useEffect(function(){
+      if(!currentTest || !currentSessionId || !isExamMode(currentTest) || !examDeadlineAt){
+        setExamRemainingSeconds(null);
+        return;
+      }
+      function tick(){
+        const remaining = computeRemainingSeconds(examDeadlineAt, examServerOffsetMs);
+        setExamRemainingSeconds(remaining);
+        if(remaining === 0 && !examAutoSubmitRef.current){
+          examAutoSubmitRef.current = true;
+          finalizeCurrentTest('time_limit');
+        }
+      }
+      tick();
+      const timerId = window.setInterval(tick, 1000);
+      return function(){ window.clearInterval(timerId); };
+    }, [currentTest, currentSessionId, examDeadlineAt, examServerOffsetMs, currentIndex, currentSelection, examReviewVisible, reviewingQuestionIndex]);
     React.useEffect(function(){
       if(!testDeleteModal.open) return;
       function onKeyDown(event){
@@ -636,7 +690,8 @@
         return;
       }
       const selectedClassIds = selectedClass ? [selectedClass.id] : [];
-      fetch('/api/tests',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({class_ids:selectedClassIds, class_id:selectedClass?selectedClass.id:null, name:testName, public: testPublic, randomize: testRandomize, answer_mode: testAnswerMode, teacher_note: ''})}).then(r=>r.json()).then(n=>{ setTests(prev=>prev.concat(Object.assign({id:n.id, name:testName, class_id:selectedClass?selectedClass.id:null, class_ids:selectedClassIds, assigned_classes:selectedClass ? [{ id: selectedClass.id, name: selectedClass.name }] : [], public: testPublic?1:0, randomize: testRandomize?1:0, answer_mode: n && n.answer_mode ? n.answer_mode : testAnswerMode, archived: 0, teacher_note: ''}, n || {}))); setTestName(''); setTestPublic(false); setTestRandomize(false); setTestAnswerMode('deferred_summary'); });
+      const timeLimitMinutes = normalizeTimeLimitMinutes(testTimeLimitMinutes, testAnswerMode);
+      fetch('/api/tests',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({class_ids:selectedClassIds, class_id:selectedClass?selectedClass.id:null, name:testName, public: testPublic, randomize: testRandomize, answer_mode: testAnswerMode, time_limit_minutes: timeLimitMinutes, teacher_note: ''})}).then(r=>r.json()).then(n=>{ setTests(prev=>prev.concat(Object.assign({id:n.id, name:testName, class_id:selectedClass?selectedClass.id:null, class_ids:selectedClassIds, assigned_classes:selectedClass ? [{ id: selectedClass.id, name: selectedClass.name }] : [], public: testPublic?1:0, randomize: testRandomize?1:0, answer_mode: n && n.answer_mode ? n.answer_mode : testAnswerMode, time_limit_minutes: n && typeof n.time_limit_minutes !== 'undefined' ? n.time_limit_minutes : timeLimitMinutes, archived: 0, teacher_note: ''}, n || {}))); setTestName(''); setTestPublic(false); setTestRandomize(false); setTestAnswerMode('deferred_summary'); setTestTimeLimitMinutes(''); });
     }
     function toggleSetClassId(classId){
       const id = String(classId);
@@ -1140,12 +1195,14 @@
       });
     }
     function updateTestRecord(test, overrides, errorMessage, successMessage){
+      const nextAnswerMode = Object.prototype.hasOwnProperty.call(overrides || {}, 'answer_mode') ? overrides.answer_mode : getAnswerModeValue(test);
       const payload = {
         name: Object.prototype.hasOwnProperty.call(overrides || {}, 'name') ? overrides.name : test.name,
         description: Object.prototype.hasOwnProperty.call(overrides || {}, 'description') ? overrides.description : (test.description || ''),
         public: Object.prototype.hasOwnProperty.call(overrides || {}, 'public') ? overrides.public : (test.public || 0),
         randomize: Object.prototype.hasOwnProperty.call(overrides || {}, 'randomize') ? overrides.randomize : (test.randomize || 0),
-        answer_mode: Object.prototype.hasOwnProperty.call(overrides || {}, 'answer_mode') ? overrides.answer_mode : getAnswerModeValue(test),
+        answer_mode: nextAnswerMode,
+        time_limit_minutes: Object.prototype.hasOwnProperty.call(overrides || {}, 'time_limit_minutes') ? normalizeTimeLimitMinutes(overrides.time_limit_minutes, nextAnswerMode) : normalizeTimeLimitMinutes(test && test.time_limit_minutes, nextAnswerMode),
         class_id: Object.prototype.hasOwnProperty.call(overrides || {}, 'class_id') ? overrides.class_id : (test.class_id || null),
         class_ids: Object.prototype.hasOwnProperty.call(overrides || {}, 'class_ids') ? overrides.class_ids : getTestClassIds(test),
         archived: Object.prototype.hasOwnProperty.call(overrides || {}, 'archived') ? overrides.archived : (test.archived || 0),
@@ -1156,7 +1213,7 @@
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify(payload)
       }).then(r=>r.json()).then(updated=>{
-        const merged = Object.assign({}, test, updated, { archived: payload.archived, answer_mode: payload.answer_mode, teacher_note: payload.teacher_note });
+        const merged = Object.assign({}, test, updated, { archived: payload.archived, answer_mode: payload.answer_mode, time_limit_minutes: payload.time_limit_minutes, teacher_note: payload.teacher_note });
         setTests(prev => prev.map(t => t.id===test.id ? merged : t));
         if(successMessage) setMessage(successMessage);
         return merged;
@@ -1784,6 +1841,19 @@
                       }, ANSWER_MODE_OPTIONS.map(function(option){
                         return e('option', { key: option.value, value: option.value }, option.label);
                       }))
+                    ),
+                    e('label', { className: 'task-toggle compact teacher-time-limit-control' },
+                      e('span', null, '制限時間（分）'),
+                      e('input', {
+                        type: 'number',
+                        min: '1',
+                        step: '1',
+                        value: getTimeLimitMinutes(t) || '',
+                        placeholder: 'なし',
+                        disabled: !!t.archived || !isExamMode(t),
+                        onChange: function(ev){ updateTestRecord(t, { time_limit_minutes: ev.target.value }, '制限時間更新エラー'); },
+                        'aria-label': '制限時間（分）'
+                      })
                     )
                   ),
                   e('p', { className: 'teacher-inline-note teacher-test-card__detail-note' }, managementState.detail),
@@ -1817,11 +1887,28 @@
                   e('span', null, '出題モード'),
                   e('select', {
                     value: testAnswerMode,
-                    onChange: function(ev){ setTestAnswerMode(getAnswerModeValue(ev.target.value)); },
+                    onChange: function(ev){
+                      const nextMode = getAnswerModeValue(ev.target.value);
+                      setTestAnswerMode(nextMode);
+                      if(nextMode !== 'exam_mode') setTestTimeLimitMinutes('');
+                    },
                     'aria-label': '出題モード'
                   }, ANSWER_MODE_OPTIONS.map(function(option){
                     return e('option', { key: option.value, value: option.value }, option.label);
                   }))
+                ),
+                e('label', { className: 'task-toggle teacher-time-limit-control' },
+                  e('span', null, '制限時間（分）'),
+                  e('input', {
+                    type: 'number',
+                    min: '1',
+                    step: '1',
+                    value: testTimeLimitMinutes,
+                    placeholder: 'なし',
+                    disabled: testAnswerMode !== 'exam_mode',
+                    onChange: function(ev){ setTestTimeLimitMinutes(ev.target.value); },
+                    'aria-label': '制限時間（分）'
+                  })
                 )
               ),
               e('div', { className: 'task-inline-actions' },
@@ -2006,6 +2093,10 @@
       setSummaryMeta(null);
       setExamCompletionMeta(null);
       setExamCloseHintVisible(false);
+      setExamDeadlineAt(null);
+      setExamServerOffsetMs(0);
+      setExamRemainingSeconds(null);
+      examAutoSubmitRef.current = false;
       setCurrentSelection([]);
       setLastResult(null);
       setAnswersByQuestionId({});
@@ -2034,6 +2125,17 @@
         }
         createdSessionId = js.id;
         setCurrentSessionId(createdSessionId);
+        const serverNowMs = js.server_now ? Date.parse(js.server_now) : NaN;
+        const serverOffset = Number.isFinite(serverNowMs) ? serverNowMs - Date.now() : 0;
+        const deadlineAt = js.deadline_at || null;
+        const sessionTimeLimit = normalizeTimeLimitMinutes(js.time_limit_minutes, 'exam_mode');
+        setExamServerOffsetMs(serverOffset);
+        setExamDeadlineAt(deadlineAt);
+        setExamRemainingSeconds(computeRemainingSeconds(deadlineAt, serverOffset));
+        setCurrentTest(Object.assign({}, t, {
+          time_limit_minutes: sessionTimeLimit || getTimeLimitMinutes(t),
+          deadline_at: deadlineAt
+        }));
         const qres = await fetch('/api/exam-sessions/' + encodeURIComponent(createdSessionId) + '/questions');
         const qs = await qres.json().catch(function(){ return []; });
         if(!qres.ok){
@@ -2113,6 +2215,13 @@
     async function saveReviewedAnswer(){
       const q = currentQuestions[currentIndex];
       if(!q || !currentSessionId || !student || !currentTest) return;
+      if(isExamMode(currentTest) && examRemainingSeconds === 0){
+        if(!examAutoSubmitRef.current){
+          examAutoSubmitRef.current = true;
+          finalizeCurrentTest('time_limit');
+        }
+        return;
+      }
       setStudentBusyLabel('回答を更新しています');
       const payload = { student_id: student.id, test_id: currentTest.id };
       if(q.type === 'multiple') payload.choice_ids = currentSelection;
@@ -2125,6 +2234,13 @@
         });
         const json = await res.json().catch(function(){ return {}; });
         if(!res.ok || (json && json.error)){
+          if(json && json.error === 'time_limit_exceeded'){
+            if(!examAutoSubmitRef.current){
+              examAutoSubmitRef.current = true;
+              finalizeCurrentTest('time_limit');
+            }
+            return;
+          }
           setMessage(json && json.error ? json.error : '回答更新エラー');
           return;
         }
@@ -2137,13 +2253,33 @@
       }
     }
 
-    async function finalizeCurrentTest(){
-      setStudentBusyLabel('結果をまとめています');
+    function buildCurrentAnswerForTimeout(){
+      if(!currentQuestions || !currentQuestions.length) return null;
+      const q = currentQuestions[currentIndex];
+      if(!q || !currentSelection || !currentSelection.length) return null;
+      const answer = { question_id: q.id };
+      if(q.type === 'multiple') answer.choice_ids = currentSelection;
+      else answer.choice_id = currentSelection[0];
+      return answer;
+    }
+
+    async function finalizeCurrentTest(reason){
+      const isTimeLimitFinish = reason === 'time_limit';
+      setStudentBusyLabel(isTimeLimitFinish ? '時間切れのため提出しています' : '結果をまとめています');
       try{
         if(!currentSessionId){
           throw new Error('session_id required');
         }
-        const finishRes = await fetch('/api/exam-sessions/'+currentSessionId+'/finish', { method: 'PUT' });
+        const finishPayload = isTimeLimitFinish ? {
+          reason: 'time_limit',
+          current_answer: buildCurrentAnswerForTimeout()
+        } : null;
+        const finishOptions = finishPayload ? {
+          method: 'PUT',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify(finishPayload)
+        } : { method: 'PUT' };
+        const finishRes = await fetch('/api/exam-sessions/'+currentSessionId+'/finish', finishOptions);
         const finishJson = await finishRes.json().catch(function(){ return {}; });
         if(!finishRes.ok){
           throw new Error(finishJson && finishJson.error ? finishJson.error : 'finish_failed');
@@ -2154,11 +2290,14 @@
           setExamCompletionMeta({
             testName: currentTest ? currentTest.name : '',
             score: finishJson && typeof finishJson.score !== 'undefined' ? finishJson.score : 0,
-            maxScore: finishJson && typeof finishJson.max_score !== 'undefined' ? finishJson.max_score : 0
+            maxScore: finishJson && typeof finishJson.max_score !== 'undefined' ? finishJson.max_score : 0,
+            timedOut: isTimeLimitFinish || (finishJson && finishJson.finish_reason === 'time_limit')
           });
           setExamCloseHintVisible(false);
           setExamReviewVisible(false);
           setReviewingQuestionIndex(null);
+          setExamDeadlineAt(null);
+          setExamRemainingSeconds(null);
           setMessage('試験終了');
           setCurrentTest(null);
           setCurrentSessionId(null);
@@ -2203,6 +2342,8 @@
         setMessage('試験終了 - 詳細スコアを表示');
         setCurrentTest(null);
         setCurrentSessionId(null);
+        setExamDeadlineAt(null);
+        setExamRemainingSeconds(null);
       }catch(e){
         setMessage('採点結果の取得に失敗しました');
       }finally{
@@ -2213,12 +2354,26 @@
     function submitCurrentAnswer(){
       const q = currentQuestions[currentIndex];
       if(!q) return;
+      if(isExamMode(currentTest) && examRemainingSeconds === 0){
+        if(!examAutoSubmitRef.current){
+          examAutoSubmitRef.current = true;
+          finalizeCurrentTest('time_limit');
+        }
+        return;
+      }
       setStudentBusyLabel('回答を送信しています');
       const payload = { student_id: student.id, test_id: currentTest.id, question_id: q.id, session_id: currentSessionId };
       if(q.type === 'multiple') payload.choice_ids = currentSelection;
       else payload.choice_id = currentSelection && currentSelection[0] ? currentSelection[0] : null;
       fetch('/api/submit-answer', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) }).then(r=>r.json()).then(j=>{
         if(j && j.error){
+          if(j.error === 'time_limit_exceeded'){
+            if(!examAutoSubmitRef.current){
+              examAutoSubmitRef.current = true;
+              finalizeCurrentTest('time_limit');
+            }
+            return;
+          }
           setMessage(j.error);
           return;
         }
@@ -2270,6 +2425,10 @@
       setSummaryMeta(null);
       setExamCompletionMeta(null);
       setExamCloseHintVisible(false);
+      setExamDeadlineAt(null);
+      setExamServerOffsetMs(0);
+      setExamRemainingSeconds(null);
+      examAutoSubmitRef.current = false;
       setAnswersByQuestionId({});
       setExamReviewVisible(false);
       setReviewingQuestionIndex(null);
@@ -2293,6 +2452,10 @@
       setSummaryMeta(null);
       setExamCompletionMeta(null);
       setExamCloseHintVisible(false);
+      setExamDeadlineAt(null);
+      setExamServerOffsetMs(0);
+      setExamRemainingSeconds(null);
+      examAutoSubmitRef.current = false;
       setAnswersByQuestionId({});
       setExamReviewVisible(false);
       setReviewingQuestionIndex(null);
@@ -2375,6 +2538,7 @@
               e('span', { className: 'student-pill' }, (t.question_count != null ? t.question_count : questionCount) != null ? ((t.question_count != null ? t.question_count : questionCount) + '問') : '問題確認中'),
               completed ? e('span', { className: 'student-pill student-pill-soft' }, '受験済み') : (latestSession ? e('span', { className: 'student-pill student-pill-muted' }, '途中') : null),
               e('span', { className: 'student-pill student-pill-muted' }, getAnswerModeLabel(t)),
+              isExamMode(t) && getTimeLimitMinutes(t) ? e('span', { className: 'student-pill student-pill-muted' }, formatTimeLimitLabel(t)) : null,
               t.randomize ? e('span', { className: 'student-pill student-pill-muted' }, 'ランダム出題') : null,
               t.public ? e('span', { className: 'student-pill student-pill-soft' }, '公開中') : null
             ),
@@ -2428,7 +2592,8 @@
           return e('article', { key: 'test-' + t.id, className: cx('student-test-card', !hasStudentName && 'is-disabled') },
             e('div', { className: 'student-test-card__top' },
               e('span', { className: 'student-pill' }, questionCount != null ? (questionCount + '問') : '問題確認中'),
-              e('span', { className: 'student-pill student-pill-muted' }, getAnswerModeLabel(t))
+              e('span', { className: 'student-pill student-pill-muted' }, getAnswerModeLabel(t)),
+              isExamMode(t) && getTimeLimitMinutes(t) ? e('span', { className: 'student-pill student-pill-muted' }, formatTimeLimitLabel(t)) : null
             ),
             e('h3', null, t.name),
             e('p', { className: 'student-test-card__meta' }, classLabel + ' / ' + getAnswerModeDescription(t)),
@@ -2505,6 +2670,7 @@
                 e('p', { className: 'student-preview-kicker' }, '試験終了'),
                 e('h2', null, '試験終了'),
                 e('p', { className: 'student-preview-lead' }, ((examCompletionMeta && examCompletionMeta.testName) || 'このテスト') + ' の回答を送信しました。'),
+                examCompletionMeta && examCompletionMeta.timedOut ? e('p', { className: 'student-action-hint' }, '制限時間に達したため、そこまでの回答を提出しました。') : null,
                 e('div', { className: 'student-summary-stats' },
                   e('article', { className: 'student-preview-stat' },
                     e('span', { className: 'student-preview-stat__label' }, '合計得点'),
@@ -2643,6 +2809,7 @@
         const answeredTotal = currentQuestions.filter(function(question){
           return getStoredSelection(question).length > 0;
         }).length;
+        const reviewRemaining = examRemainingSeconds !== null ? formatRemainingTime(examRemainingSeconds) : null;
         return e('div', { className: 'student-preview-shell' },
           studentBusyLabel ? e('div', { className: 'student-status-strip', role: 'status' }, studentBusyLabel) : null,
           e('section', { className: 'student-preview-banner student-preview-banner-loggedin' },
@@ -2650,8 +2817,9 @@
               e('p', { className: 'student-preview-kicker' }, '見直し'),
               e('h2', null, (currentTest && currentTest.name ? currentTest.name : 'このテスト') + ' の回答確認'),
               e('p', { className: 'student-preview-lead' }, '提出前に、全問題の回答内容を確認できます。必要な問題は見直してから提出してください。'),
+              reviewRemaining ? e('p', { className: 'student-action-hint' }, '残り ' + reviewRemaining) : null,
               e('div', { className: 'hero-actions student-summary-hero__actions' },
-                e('button', { onClick: finalizeCurrentTest, className: 'btn btn-primary', type: 'button', disabled: !!studentBusyLabel || answeredTotal < currentQuestions.length }, studentBusyLabel ? '提出中...' : '回答を提出')
+                e('button', { onClick: function(){ finalizeCurrentTest(); }, className: 'btn btn-primary', type: 'button', disabled: !!studentBusyLabel || answeredTotal < currentQuestions.length || examRemainingSeconds === 0 }, studentBusyLabel ? '提出中...' : '回答を提出')
               )
             )
           ),
@@ -2699,6 +2867,8 @@
       const reviewingExamQuestion = isExamMode(currentTest) && examReviewVisible && reviewingQuestionIndex !== null;
       const answeredCount = reviewingExamQuestion ? currentQuestions.length : currentIndex + (showingFeedback ? 1 : 0);
       const progressPercent = currentQuestions.length ? Math.round(answeredCount / currentQuestions.length * 100) : 0;
+      const remainingLabel = examRemainingSeconds !== null ? formatRemainingTime(examRemainingSeconds) : null;
+      const examTimeIsUp = isExamMode(currentTest) && examRemainingSeconds === 0;
 
       return e('div', { className: 'student-exam-shell' },
         e('section', { className: 'student-exam-main' },
@@ -2713,7 +2883,10 @@
                 e('p', { className: 'student-preview-kicker student-preview-kicker-muted' }, 'テスト進捗'),
                 e('h3', null, currentTest.name)
               ),
-              e('span', { className: 'student-status-pill is-neutral' }, '進捗 ' + progressPercent + '%')
+              e('div', { className: 'student-exam-progress-panel__badges' },
+                remainingLabel ? e('span', { className: cx('student-status-pill', examRemainingSeconds <= 60 ? 'is-warning' : 'is-neutral') }, '残り ' + remainingLabel) : null,
+                e('span', { className: 'student-status-pill is-neutral' }, '進捗 ' + progressPercent + '%')
+              )
             ),
             e('p', { className: 'student-exam-progress-panel__lead' }, (student && student.name ? student.name : studentName || '学習者') + ' として学習中'),
             e('div', { className: 'student-exam-progress-bar' }, e('span', { style: { width: progressPercent + '%' } })),
@@ -2756,7 +2929,7 @@
                   const selected = currentSelection.includes(c.id);
                   const inputType = q.type === 'multiple' ? 'checkbox' : 'radio';
                   return e('label', { key: c.id, className: cx('student-choice-option', selected && 'is-selected') },
-                    e('input', { type: inputType, name: 'q' + q.id, checked: selected, disabled: !!studentBusyLabel, onChange: function(ev){ selectChoice(q, c.id, q.type === 'multiple' ? ev.target.checked : true); } }),
+                    e('input', { type: inputType, name: 'q' + q.id, checked: selected, disabled: !!studentBusyLabel || examTimeIsUp, onChange: function(ev){ selectChoice(q, c.id, q.type === 'multiple' ? ev.target.checked : true); } }),
                     e('span', { className: 'student-choice-option__marker' }),
                     e('span', { className: 'student-choice-option__text' }, c.text)
                   );
@@ -2764,10 +2937,10 @@
               ),
           e('div', { className: 'student-exam-actions' },
             reviewingExamQuestion
-              ? e('button', { onClick: saveReviewedAnswer, className: 'btn btn-primary', type: 'button', disabled: !currentSelection.length || !!studentBusyLabel }, studentBusyLabel ? '更新中...' : '見直しリストへ戻る')
+              ? e('button', { onClick: saveReviewedAnswer, className: 'btn btn-primary', type: 'button', disabled: !currentSelection.length || !!studentBusyLabel || examTimeIsUp }, studentBusyLabel ? '更新中...' : '見直しリストへ戻る')
               : showingFeedback
               ? e('button', { onClick: nextQuestion, className: 'btn btn-primary', type: 'button', disabled: !!studentBusyLabel }, currentIndex + 1 < currentQuestions.length ? '次の問題へ' : '振り返りを見る')
-              : e('button', { onClick: submitCurrentAnswer, className: 'btn btn-primary', type: 'button', disabled: !currentSelection.length || !!studentBusyLabel }, studentBusyLabel ? '送信中...' : '回答を送信'),
+              : e('button', { onClick: submitCurrentAnswer, className: 'btn btn-primary', type: 'button', disabled: !currentSelection.length || !!studentBusyLabel || examTimeIsUp }, studentBusyLabel ? '送信中...' : '回答を送信'),
             reviewingExamQuestion ? e('span', { className: 'student-action-hint' }, '正答や得点は提出後まで表示されません。') : (showingFeedback ? e('span', { className: 'student-action-hint' }, '得点は最後の振り返りページで表示します。') : null)
           )
         )

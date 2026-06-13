@@ -10,9 +10,10 @@
   let isDirty = false;
   let lastSavedClassId = '';
   let lastSavedAnswerMode = 'deferred_summary';
+  let lastSavedTimeLimitMinutes = null;
   let lastSavedQuestions = [];
   let editingTestId = null;
-  let editingTestMeta = { description: '', public: 0, randomize: 0, answer_mode: 'deferred_summary' };
+  let editingTestMeta = { description: '', public: 0, randomize: 0, answer_mode: 'deferred_summary', time_limit_minutes: null };
   const persistedDeletedQuestionIds = new Set();
   const MAX_QUESTIONS = 100;
   const MIN_CHOICES = 2;
@@ -24,6 +25,13 @@
     if(value === 'immediate_feedback') return 'immediate_feedback';
     if(value === 'exam_mode') return 'exam_mode';
     return 'deferred_summary';
+  }
+
+  function normalizeTimeLimitMinutes(value, answerMode){
+    if(normalizeAnswerMode(answerMode) !== 'exam_mode') return null;
+    if(value === null || typeof value === 'undefined' || value === '') return null;
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
   }
 
   function getQuestionEditor(){
@@ -176,6 +184,19 @@
     return normalizeAnswerMode(answerModeSelect ? answerModeSelect.value : editingTestMeta.answer_mode);
   }
 
+  function getCurrentTimeLimitMinutes(){
+    const field = el('time-limit-minutes');
+    return normalizeTimeLimitMinutes(field ? field.value : editingTestMeta.time_limit_minutes, getCurrentAnswerMode());
+  }
+
+  function updateTimeLimitControl(){
+    const field = el('time-limit-minutes');
+    if(!field) return;
+    const enabled = getCurrentAnswerMode() === 'exam_mode';
+    field.disabled = !enabled;
+    if(!enabled) field.value = '';
+  }
+
   function getCurrentQuestionsSnapshot(){
     return JSON.stringify(state.questions.map(normalizeQuestion));
   }
@@ -218,12 +239,13 @@
   }
 
   function refreshDirtyState(){
-    isDirty = getCurrentClassId() !== lastSavedClassId || getCurrentAnswerMode() !== lastSavedAnswerMode || getCurrentQuestionsSnapshot() !== getSavedQuestionsSnapshot() || hasPendingEditorChanges();
+    isDirty = getCurrentClassId() !== lastSavedClassId || getCurrentAnswerMode() !== lastSavedAnswerMode || getCurrentTimeLimitMinutes() !== lastSavedTimeLimitMinutes || getCurrentQuestionsSnapshot() !== getSavedQuestionsSnapshot() || hasPendingEditorChanges();
   }
 
   function markSavedState(){
     lastSavedClassId = getCurrentClassId();
     lastSavedAnswerMode = getCurrentAnswerMode();
+    lastSavedTimeLimitMinutes = getCurrentTimeLimitMinutes();
     lastSavedQuestions = cloneQuestions(state.questions);
     persistedDeletedQuestionIds.clear();
     isDirty = false;
@@ -708,6 +730,7 @@
     }
     let classId = el('class-select').value || null;
     const answerMode = getCurrentAnswerMode();
+    const timeLimitMinutes = getCurrentTimeLimitMinutes();
     if(!classId){
       const ok = confirm('クラスが選択されていません。後でクラスを設定しますか？\n「キャンセル」を選ぶとクラス選択に戻れます。');
       if(!ok){ el('class-select').focus(); setStatus('クラスを選択してください', true); return; }
@@ -717,7 +740,7 @@
     try{
       if(editingTestId){
         // update existing test
-        await requestJson('/api/tests/' + encodeURIComponent(editingTestId), { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name: name, description: editingTestMeta.description || '', public: editingTestMeta.public ? 1 : 0, randomize: editingTestMeta.randomize ? 1 : 0, answer_mode: answerMode, class_id: classId || null }) }, 'テスト更新に失敗しました');
+        await requestJson('/api/tests/' + encodeURIComponent(editingTestId), { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name: name, description: editingTestMeta.description || '', public: editingTestMeta.public ? 1 : 0, randomize: editingTestMeta.randomize ? 1 : 0, answer_mode: answerMode, time_limit_minutes: timeLimitMinutes, class_id: classId || null }) }, 'テスト更新に失敗しました');
         // process questions: update existing ones, create new ones
         for(const q of state.questions){
           if(q.id){
@@ -741,7 +764,7 @@
         setTimeout(function(){ window.location.href = '/app.html'; }, 1500);
       } else {
         // create new test
-        const j = await requestJson('/api/tests', { method:'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ class_id: classId || null, name: name, public: 0, randomize: 0, answer_mode: answerMode }) }, 'テスト作成に失敗しました');
+        const j = await requestJson('/api/tests', { method:'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ class_id: classId || null, name: name, public: 0, randomize: 0, answer_mode: answerMode, time_limit_minutes: timeLimitMinutes }) }, 'テスト作成に失敗しました');
         if(!j || !j.id){ setStatus('テスト作成に失敗しました', true); btn.disabled=false; return; }
         const testId = j.id;
         for(const q of state.questions){
@@ -953,14 +976,15 @@
     setupRichQuestionEditor();
     el('question-explanation').addEventListener('input', refreshDirtyState);
     el('class-select').addEventListener('change', refreshDirtyState);
-    if(el('answer-mode-select')) el('answer-mode-select').addEventListener('change', refreshDirtyState);
+    if(el('answer-mode-select')) el('answer-mode-select').addEventListener('change', function(){ updateTimeLimitControl(); refreshDirtyState(); });
+    if(el('time-limit-minutes')) el('time-limit-minutes').addEventListener('input', refreshDirtyState);
 
     // setup unsaved handlers
     setupUnsavedHandlers();
     setupDeleteQuestionsModal();
 
     // initialize editor and classes, and prefill from query params if provided
-    resetEditor(); renderQuestionsList();
+    updateTimeLimitControl(); resetEditor(); renderQuestionsList();
     (async function(){
       const classes = await loadClasses();
       // parse query params
@@ -988,9 +1012,12 @@
               description: test.description || '',
               public: test.public ? 1 : 0,
               randomize: test.randomize ? 1 : 0,
-              answer_mode: normalizeAnswerMode(test.answer_mode)
+              answer_mode: normalizeAnswerMode(test.answer_mode),
+              time_limit_minutes: normalizeTimeLimitMinutes(test.time_limit_minutes, test.answer_mode)
             };
             if(el('answer-mode-select')) el('answer-mode-select').value = editingTestMeta.answer_mode;
+            if(el('time-limit-minutes')) el('time-limit-minutes').value = editingTestMeta.time_limit_minutes || '';
+            updateTimeLimitControl();
             if(!presetName) el('test-name').value = test.name || '';
             if(!presetClass){ const sel = el('class-select'); sel.value = test.class_id || ''; }
           }

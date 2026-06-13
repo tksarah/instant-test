@@ -416,6 +416,36 @@ function normalizeAnswerMode(value){
   return 'deferred_summary';
 }
 
+function normalizeTimeLimitMinutes(value, answerMode){
+  if(normalizeAnswerMode(answerMode) !== 'exam_mode') return null;
+  if(value === null || typeof value === 'undefined' || value === '') return null;
+  const parsed = Number(value);
+  if(!Number.isInteger(parsed) || parsed <= 0) return null;
+  return parsed;
+}
+
+function makeHttpError(message, statusCode){
+  const err = new Error(message);
+  err.statusCode = statusCode;
+  return err;
+}
+
+function isSessionTimeLimitExpired(session, nowMs){
+  if(!session || !session.deadline_at) return false;
+  const deadlineMs = Date.parse(session.deadline_at);
+  if(!Number.isFinite(deadlineMs)) return false;
+  const currentMs = typeof nowMs === 'number' ? nowMs : Date.now();
+  return currentMs >= deadlineMs;
+}
+
+function normalizeSubmittedChoiceIds(source){
+  const submitted = [];
+  const body = source || {};
+  if(Array.isArray(body.choice_ids)) submitted.push(...body.choice_ids.map(x => parseInt(x, 10)).filter(Boolean));
+  else if(body.choice_id) submitted.push(parseInt(body.choice_id, 10));
+  return Array.from(new Set(submitted));
+}
+
 function normalizeTeacherNote(value){
   if(typeof value !== 'string') return '';
   return value.slice(0, 1000);
@@ -549,7 +579,7 @@ async function getTestSetItems(setIds, studentId){
   if(!setIds.length) return {};
   const placeholders = setIds.map(() => '?').join(',');
   const rows = await dbAllAsync(
-    `SELECT tsi.set_id, tsi.position, t.id, t.name, t.description, t.public, t.randomize, t.answer_mode, t.archived,
+    `SELECT tsi.set_id, tsi.position, t.id, t.name, t.description, t.public, t.randomize, t.answer_mode, t.time_limit_minutes, t.archived,
             COUNT(q.id) AS question_count
      FROM test_set_items tsi
      JOIN tests t ON t.id=tsi.test_id
@@ -590,6 +620,7 @@ async function getTestSetItems(setIds, studentId){
       archived: row.archived ? 1 : 0,
       randomize: row.randomize ? 1 : 0,
       answer_mode: normalizeAnswerMode(row.answer_mode),
+      time_limit_minutes: normalizeTimeLimitMinutes(row.time_limit_minutes, row.answer_mode),
       question_count: row.question_count || 0,
       position: row.position,
       latest_session: session ? {
@@ -598,6 +629,8 @@ async function getTestSetItems(setIds, studentId){
         score: session.score || 0,
         max_score: session.max_score || 0,
         percent: session.percent || 0,
+        time_limit_minutes: session.time_limit_minutes || null,
+        deadline_at: session.deadline_at || null,
         finished_at: session.finished_at,
         started_at: session.started_at
       } : null
@@ -661,6 +694,7 @@ async function studentCanAccessTest(studentClassId, testId){
 
 function serializeTestForResponse(row, includeTeacherNote){
   const normalized = { ...row, answer_mode: normalizeAnswerMode(row && row.answer_mode) };
+  normalized.time_limit_minutes = normalizeTimeLimitMinutes(row && row.time_limit_minutes, normalized.answer_mode);
   if(includeTeacherNote){
     normalized.teacher_note = normalizeTeacherNote(row && row.teacher_note);
   } else {
@@ -871,6 +905,104 @@ function buildAnswerFeedback(questionRow, choiceRows, submittedChoiceIds, correc
   };
 }
 
+async function saveSessionAnswer(session, test, questionId, submittedChoiceIds, options){
+  const opts = options || {};
+  const normalizedQuestionId = parseInt(questionId, 10);
+  if(!normalizedQuestionId) throw makeHttpError('invalid_question_id', 400);
+
+  let questionRow = null;
+  if(opts.checkQuestionBeforePlan){
+    questionRow = await dbGetAsync(
+      'SELECT id, test_id, text, explanation, content_html, content_format FROM questions WHERE id=? AND test_id=?',
+      [normalizedQuestionId, session.test_id]
+    );
+    if(!questionRow) throw makeHttpError('invalid_question_id', 400);
+  }
+
+  const planRows = await ensureExamSessionQuestionPlan({ ...session, randomize: test && test.randomize });
+  const planRow = (planRows || []).find(row => Number(row.question_id) === Number(normalizedQuestionId));
+  if(!planRow) throw makeHttpError('question_not_in_session', 400);
+
+  if(!questionRow){
+    questionRow = await dbGetAsync(
+      'SELECT id, test_id, text, explanation, content_html, content_format FROM questions WHERE id=? AND test_id=?',
+      [normalizedQuestionId, session.test_id]
+    );
+    if(!questionRow) throw makeHttpError('invalid_question_id', 400);
+  }
+
+  if(opts.requireNextQuestion){
+    const nextPlanRow = (planRows || []).find(row => !row.answered_at);
+    if(!nextPlanRow) throw makeHttpError('session_completed', 409);
+    if(Number(nextPlanRow.question_id) !== Number(normalizedQuestionId)){
+      const err = makeHttpError('question_out_of_order', 409);
+      err.expected_question_id = nextPlanRow.question_id;
+      throw err;
+    }
+  }
+
+  const existingAnswers = await dbAllAsync(
+    'SELECT choice_id FROM student_answers WHERE session_id=? AND student_id=? AND test_id=? AND question_id=?',
+    [session.id, session.student_id, session.test_id, normalizedQuestionId]
+  );
+  if(existingAnswers.length && !opts.replaceExisting){
+    throw makeHttpError('question_already_answered', 409);
+  }
+
+  const choiceRows = await dbAllAsync('SELECT id, text, is_correct FROM choices WHERE question_id=?', [normalizedQuestionId]);
+  const validChoiceIds = new Set((choiceRows || []).map(row => row.id));
+  const uniqueSubmitted = Array.from(new Set((submittedChoiceIds || []).map(id => parseInt(id, 10)).filter(Boolean)));
+  const hasInvalidChoice = uniqueSubmitted.some(cid => !validChoiceIds.has(cid));
+  if(hasInvalidChoice) throw makeHttpError('invalid_choice_id', 400);
+
+  const correctIds = (choiceRows || []).filter(row => row.is_correct === 1 || row.is_correct === true).map(row => row.id);
+  let correct = false;
+  if(uniqueSubmitted.length > 0){
+    const submittedSet = new Set(uniqueSubmitted);
+    const correctSet = new Set(correctIds);
+    if(submittedSet.size === correctSet.size){
+      correct = [...submittedSet].every(id => correctSet.has(id));
+    }
+  }
+
+  if(opts.replaceExisting){
+    await dbRunAsync(
+      'DELETE FROM student_answers WHERE session_id=? AND student_id=? AND test_id=? AND question_id=?',
+      [session.id, session.student_id, session.test_id, normalizedQuestionId]
+    );
+  }
+
+  if(uniqueSubmitted.length === 0){
+    await dbRunAsync(
+      'INSERT INTO student_answers (student_id, test_id, question_id, choice_id, correct, session_id) VALUES (?,?,?,?,?,?)',
+      [session.student_id, session.test_id, normalizedQuestionId, null, correct ? 1 : 0, session.id]
+    );
+  } else {
+    for(const submittedChoiceId of uniqueSubmitted){
+      await dbRunAsync(
+        'INSERT INTO student_answers (student_id, test_id, question_id, choice_id, correct, session_id) VALUES (?,?,?,?,?,?)',
+        [session.student_id, session.test_id, normalizedQuestionId, submittedChoiceId, correct ? 1 : 0, session.id]
+      );
+    }
+  }
+
+  const answeredAt = new Date().toISOString();
+  if(opts.replaceExisting){
+    await dbRunAsync(
+      'UPDATE exam_session_questions SET answered_at=COALESCE(answered_at, ?) WHERE session_id=? AND question_id=?',
+      [answeredAt, session.id, normalizedQuestionId]
+    );
+  } else {
+    const markAnswered = await dbRunAsync(
+      'UPDATE exam_session_questions SET answered_at=? WHERE session_id=? AND question_id=? AND answered_at IS NULL',
+      [answeredAt, session.id, normalizedQuestionId]
+    );
+    if(!markAnswered.changes) throw makeHttpError('question_already_answered', 409);
+  }
+
+  return { questionRow, choiceRows, submittedChoiceIds: uniqueSubmitted, correct };
+}
+
 function buildTestSummaryForStudent(testId, studentId, sessionId){
   return new Promise((resolve, reject) => {
     db.all('SELECT * FROM questions WHERE test_id=?', [testId], (err, questions) => {
@@ -955,12 +1087,12 @@ function authorizeStudentTestAccess(req, res, testId, studentId, cb){
   (async () => {
     try{
       if(req.teacher){
-        const ownedTest = await dbGetAsync('SELECT id, class_id, public, teacher_id, randomize, answer_mode FROM tests WHERE id=? AND teacher_id=?', [requestedTestId, req.teacher.id]);
+        const ownedTest = await dbGetAsync('SELECT id, class_id, public, teacher_id, randomize, answer_mode, time_limit_minutes FROM tests WHERE id=? AND teacher_id=?', [requestedTestId, req.teacher.id]);
         if(!ownedTest) return res.status(404).json({ error: 'not_found' });
         return cb({ studentId: requestedStudentId, test: ownedTest, actor: 'teacher' });
       }
 
-      const test = await dbGetAsync('SELECT id, class_id, public, randomize, answer_mode, archived FROM tests WHERE id=?', [requestedTestId]);
+      const test = await dbGetAsync('SELECT id, class_id, public, randomize, answer_mode, time_limit_minutes, archived FROM tests WHERE id=?', [requestedTestId]);
       if(!test) return res.status(404).json({ error: 'not_found' });
       if(!req.student) return res.status(401).json({ error: 'unauthorized' });
       if(req.student.id !== requestedStudentId) return res.status(403).json({ error: 'forbidden' });
@@ -1579,16 +1711,17 @@ app.get('/api/test-sets/:id/summary', requireTeacher, async (req, res) => {
 
 // Tests
 app.post('/api/tests', requireTeacher, async (req, res) => {
-  const { name, description, public: pub, randomize, answer_mode, teacher_note } = req.body;
+  const { name, description, public: pub, randomize, answer_mode, teacher_note, time_limit_minutes } = req.body;
   const answerMode = normalizeAnswerMode(answer_mode);
+  const timeLimitMinutes = normalizeTimeLimitMinutes(time_limit_minutes, answerMode);
   const teacherNote = normalizeTeacherNote(teacher_note);
   const classIds = normalizeClassIdsFromBody(req.body || {});
   try{
     await ensureTeacherOwnsClassesAsync(req.teacher.id, classIds);
     const representativeClassId = classIds.length ? classIds[0] : null;
     const inserted = await dbRunAsync(
-      'INSERT INTO tests (teacher_id, class_id, name, description, teacher_note, public, randomize, answer_mode) VALUES (?,?,?,?,?,?,?,?)',
-      [req.teacher.id, representativeClassId, name, description||'', teacherNote, pub?1:0, randomize?1:0, answerMode]
+      'INSERT INTO tests (teacher_id, class_id, name, description, teacher_note, public, randomize, answer_mode, time_limit_minutes) VALUES (?,?,?,?,?,?,?,?,?)',
+      [req.teacher.id, representativeClassId, name, description||'', teacherNote, pub?1:0, randomize?1:0, answerMode, timeLimitMinutes]
     );
     await replaceTestClasses(inserted.lastID, classIds);
     const row = await dbGetAsync('SELECT * FROM tests WHERE id=? AND teacher_id=?', [inserted.lastID, req.teacher.id]);
@@ -1646,11 +1779,11 @@ app.get('/api/tests', (req, res) => {
 // Update a test (name, description, public, randomize, answer_mode, archived, teacher_note)
 app.put('/api/tests/:id', requireTeacher, (req, res) => {
   const id = req.params.id;
-  const { name, description, public: pub, randomize, answer_mode, class_id, archived, teacher_note } = req.body;
+  const { name, description, public: pub, randomize, answer_mode, class_id, archived, teacher_note, time_limit_minutes } = req.body;
   // Build update dynamically so that if `class_id` is undefined we don't overwrite it
   const fields = ['name=?', 'description=?', 'public=?', 'randomize=?'];
   const vals = [name, description||'', pub?1:0, randomize?1:0];
-  ensureTeacherOwnsTest(req, res, id, () => {
+  ensureTeacherOwnsTest(req, res, id, (existingTest) => {
     const proceed = async () => {
       const hasClassIds = Object.prototype.hasOwnProperty.call(req.body || {}, 'class_ids');
       const shouldUpdateClasses = hasClassIds || Object.prototype.hasOwnProperty.call(req.body || {}, 'class_id');
@@ -1658,9 +1791,18 @@ app.put('/api/tests/:id', requireTeacher, (req, res) => {
       if(shouldUpdateClasses){
         await ensureTeacherOwnsClassesAsync(req.teacher.id, classIds);
       }
+      const nextAnswerMode = typeof answer_mode !== 'undefined' ? normalizeAnswerMode(answer_mode) : normalizeAnswerMode(existingTest && existingTest.answer_mode);
       if(typeof answer_mode !== 'undefined'){
         fields.push('answer_mode=?');
-        vals.push(normalizeAnswerMode(answer_mode));
+        vals.push(nextAnswerMode);
+      }
+      if(typeof answer_mode !== 'undefined' || typeof time_limit_minutes !== 'undefined'){
+        fields.push('time_limit_minutes=?');
+        vals.push(
+          typeof time_limit_minutes !== 'undefined'
+            ? normalizeTimeLimitMinutes(time_limit_minutes, nextAnswerMode)
+            : normalizeTimeLimitMinutes(existingTest && existingTest.time_limit_minutes, nextAnswerMode)
+        );
       }
       if(shouldUpdateClasses){
         fields.push('class_id=?');
@@ -1948,17 +2090,14 @@ app.post('/api/submit-answer', (req, res) => {
       const normalizedSessionId = parseInt(session_id, 10);
       if(!normalizedSessionId) return res.status(400).json({ error: 'session_id required' });
 
-      const submitted = [];
-      if(Array.isArray(choice_ids)) submitted.push(...choice_ids.map(x => parseInt(x, 10)).filter(Boolean));
-      else if(choice_id) submitted.push(parseInt(choice_id, 10));
-      const uniqueSubmitted = Array.from(new Set(submitted));
+      const uniqueSubmitted = normalizeSubmittedChoiceIds({ choice_id, choice_ids });
       const answerMode = normalizeAnswerMode(test && test.answer_mode);
 
       try{
         await dbRunAsync('BEGIN IMMEDIATE TRANSACTION');
 
         const session = await dbGetAsync(
-          'SELECT id, student_id, test_id, status, finished_at FROM exam_sessions WHERE id=? AND student_id=? AND test_id=?',
+          'SELECT id, student_id, test_id, started_at, status, finished_at, time_limit_minutes, deadline_at FROM exam_sessions WHERE id=? AND student_id=? AND test_id=?',
           [normalizedSessionId, authorizedStudentId, test_id]
         );
         if(!session){
@@ -1969,80 +2108,22 @@ app.post('/api/submit-answer', (req, res) => {
           await dbRunAsync('ROLLBACK');
           return res.status(409).json({ error: 'session_completed' });
         }
-
-        const questionRow = await dbGetAsync('SELECT id, test_id, text, explanation, content_html, content_format FROM questions WHERE id=? AND test_id=?', [question_id, test_id]);
-        if(!questionRow){
+        if(isSessionTimeLimitExpired(session)){
           await dbRunAsync('ROLLBACK');
-          return res.status(400).json({ error: 'invalid_question_id' });
+          return res.status(409).json({ error: 'time_limit_exceeded' });
         }
 
-        const planRows = await ensureExamSessionQuestionPlan({ ...session, randomize: test && test.randomize });
-        const nextPlanRow = (planRows || []).find(row => !row.answered_at);
-        if(!nextPlanRow){
-          await dbRunAsync('ROLLBACK');
-          return res.status(409).json({ error: 'session_completed' });
-        }
-        if(Number(nextPlanRow.question_id) !== Number(question_id)){
-          await dbRunAsync('ROLLBACK');
-          return res.status(409).json({ error: 'question_out_of_order', expected_question_id: nextPlanRow.question_id });
-        }
-
-        const existingAnswers = await dbAllAsync(
-          'SELECT choice_id FROM student_answers WHERE session_id=? AND student_id=? AND test_id=? AND question_id=?',
-          [normalizedSessionId, authorizedStudentId, test_id, question_id]
-        );
-        if(existingAnswers.length){
-          await dbRunAsync('ROLLBACK');
-          return res.status(409).json({ error: 'question_already_answered' });
-        }
-
-        const choiceRows = await dbAllAsync('SELECT id, text, is_correct FROM choices WHERE question_id=?', [question_id]);
-        const validChoiceIds = new Set((choiceRows || []).map(row => row.id));
-        const hasInvalidChoice = uniqueSubmitted.some(cid => !validChoiceIds.has(cid));
-        if(hasInvalidChoice){
-          await dbRunAsync('ROLLBACK');
-          return res.status(400).json({ error: 'invalid_choice_id' });
-        }
-
-        const correctIds = (choiceRows || []).filter(row => row.is_correct === 1 || row.is_correct === true).map(row => row.id);
-        let correct = false;
-        if(uniqueSubmitted.length > 0){
-          const submittedSet = new Set(uniqueSubmitted);
-          const correctSet = new Set(correctIds);
-          if(submittedSet.size === correctSet.size){
-            correct = [...submittedSet].every(id => correctSet.has(id));
-          }
-        }
-
-        if(uniqueSubmitted.length === 0){
-          await dbRunAsync(
-            'INSERT INTO student_answers (student_id, test_id, question_id, choice_id, correct, session_id) VALUES (?,?,?,?,?,?)',
-            [authorizedStudentId, test_id, question_id, null, correct ? 1 : 0, normalizedSessionId]
-          );
-        } else {
-          for(const submittedChoiceId of uniqueSubmitted){
-            await dbRunAsync(
-              'INSERT INTO student_answers (student_id, test_id, question_id, choice_id, correct, session_id) VALUES (?,?,?,?,?,?)',
-              [authorizedStudentId, test_id, question_id, submittedChoiceId, correct ? 1 : 0, normalizedSessionId]
-            );
-          }
-        }
-
-        const answeredAt = new Date().toISOString();
-        const markAnswered = await dbRunAsync(
-          'UPDATE exam_session_questions SET answered_at=? WHERE session_id=? AND question_id=? AND answered_at IS NULL',
-          [answeredAt, normalizedSessionId, question_id]
-        );
-        if(!markAnswered.changes){
-          await dbRunAsync('ROLLBACK');
-          return res.status(409).json({ error: 'question_already_answered' });
-        }
+        const saved = await saveSessionAnswer(session, test, question_id, uniqueSubmitted, {
+          replaceExisting: false,
+          requireNextQuestion: true,
+          checkQuestionBeforePlan: true
+        });
 
         await dbRunAsync('COMMIT');
 
         const response = { accepted: true };
         if(answerMode === 'immediate_feedback'){
-          response.feedback = buildAnswerFeedback(questionRow, choiceRows, uniqueSubmitted, correct);
+          response.feedback = buildAnswerFeedback(saved.questionRow, saved.choiceRows, saved.submittedChoiceIds, saved.correct);
         }
         return res.json(response);
       }catch(err){
@@ -2051,7 +2132,10 @@ app.post('/api/submit-answer', (req, res) => {
         }catch(_rollbackErr){
           // surface the original error
         }
-        return res.status(500).json({ error: err.message });
+        const statusCode = err && err.statusCode ? err.statusCode : 500;
+        const payload = { error: err && err.message ? err.message : 'internal_error' };
+        if(err && err.expected_question_id) payload.expected_question_id = err.expected_question_id;
+        return res.status(statusCode).json(payload);
       }
     })();
   });
@@ -2068,16 +2152,13 @@ app.put('/api/exam-sessions/:sessionId/answers/:questionId', (req, res) => {
 
   authorizeStudentTestAccess(req, res, test_id, student_id, ({ studentId: authorizedStudentId, test }) => {
     (async () => {
-      const submitted = [];
-      if(Array.isArray(choice_ids)) submitted.push(...choice_ids.map(x => parseInt(x, 10)).filter(Boolean));
-      else if(choice_id) submitted.push(parseInt(choice_id, 10));
-      const uniqueSubmitted = Array.from(new Set(submitted));
+      const uniqueSubmitted = normalizeSubmittedChoiceIds({ choice_id, choice_ids });
 
       try{
         await dbRunAsync('BEGIN IMMEDIATE TRANSACTION');
 
         const session = await dbGetAsync(
-          'SELECT id, student_id, test_id, status, finished_at FROM exam_sessions WHERE id=? AND student_id=? AND test_id=?',
+          'SELECT id, student_id, test_id, started_at, status, finished_at, time_limit_minutes, deadline_at FROM exam_sessions WHERE id=? AND student_id=? AND test_id=?',
           [sessionId, authorizedStudentId, test_id]
         );
         if(!session){
@@ -2088,62 +2169,12 @@ app.put('/api/exam-sessions/:sessionId/answers/:questionId', (req, res) => {
           await dbRunAsync('ROLLBACK');
           return res.status(409).json({ error: 'session_completed' });
         }
-
-        const planRows = await ensureExamSessionQuestionPlan({ ...session, randomize: test && test.randomize });
-        const planRow = (planRows || []).find(row => Number(row.question_id) === Number(questionId));
-        if(!planRow){
+        if(isSessionTimeLimitExpired(session)){
           await dbRunAsync('ROLLBACK');
-          return res.status(400).json({ error: 'question_not_in_session' });
+          return res.status(409).json({ error: 'time_limit_exceeded' });
         }
 
-        const questionRow = await dbGetAsync('SELECT id, test_id FROM questions WHERE id=? AND test_id=?', [questionId, test_id]);
-        if(!questionRow){
-          await dbRunAsync('ROLLBACK');
-          return res.status(400).json({ error: 'invalid_question_id' });
-        }
-
-        const choiceRows = await dbAllAsync('SELECT id, is_correct FROM choices WHERE question_id=?', [questionId]);
-        const validChoiceIds = new Set((choiceRows || []).map(row => row.id));
-        const hasInvalidChoice = uniqueSubmitted.some(cid => !validChoiceIds.has(cid));
-        if(hasInvalidChoice){
-          await dbRunAsync('ROLLBACK');
-          return res.status(400).json({ error: 'invalid_choice_id' });
-        }
-
-        const correctIds = (choiceRows || []).filter(row => row.is_correct === 1 || row.is_correct === true).map(row => row.id);
-        let correct = false;
-        if(uniqueSubmitted.length > 0){
-          const submittedSet = new Set(uniqueSubmitted);
-          const correctSet = new Set(correctIds);
-          if(submittedSet.size === correctSet.size){
-            correct = [...submittedSet].every(id => correctSet.has(id));
-          }
-        }
-
-        await dbRunAsync(
-          'DELETE FROM student_answers WHERE session_id=? AND student_id=? AND test_id=? AND question_id=?',
-          [sessionId, authorizedStudentId, test_id, questionId]
-        );
-
-        if(uniqueSubmitted.length === 0){
-          await dbRunAsync(
-            'INSERT INTO student_answers (student_id, test_id, question_id, choice_id, correct, session_id) VALUES (?,?,?,?,?,?)',
-            [authorizedStudentId, test_id, questionId, null, correct ? 1 : 0, sessionId]
-          );
-        } else {
-          for(const submittedChoiceId of uniqueSubmitted){
-            await dbRunAsync(
-              'INSERT INTO student_answers (student_id, test_id, question_id, choice_id, correct, session_id) VALUES (?,?,?,?,?,?)',
-              [authorizedStudentId, test_id, questionId, submittedChoiceId, correct ? 1 : 0, sessionId]
-            );
-          }
-        }
-
-        const answeredAt = new Date().toISOString();
-        await dbRunAsync(
-          'UPDATE exam_session_questions SET answered_at=COALESCE(answered_at, ?) WHERE session_id=? AND question_id=?',
-          [answeredAt, sessionId, questionId]
-        );
+        await saveSessionAnswer(session, test, questionId, uniqueSubmitted, { replaceExisting: true });
 
         await dbRunAsync('COMMIT');
         return res.json({ accepted: true, question_id: questionId, choice_ids: uniqueSubmitted });
@@ -2153,7 +2184,7 @@ app.put('/api/exam-sessions/:sessionId/answers/:questionId', (req, res) => {
         }catch(_rollbackErr){
           // surface the original error
         }
-        return res.status(500).json({ error: err.message });
+        return res.status(err && err.statusCode ? err.statusCode : 500).json({ error: err && err.message ? err.message : 'internal_error' });
       }
     })();
   });
@@ -2316,15 +2347,26 @@ app.post('/api/exam-sessions', (req, res) => {
   authorizeStudentTestAccess(req, res, test_id, student_id, ({ studentId: authorizedStudentId, test }) => {
     (async () => {
       const started_at = new Date().toISOString();
+      const timeLimitMinutes = normalizeTimeLimitMinutes(test && test.time_limit_minutes, test && test.answer_mode);
+      const deadlineAt = timeLimitMinutes ? new Date(Date.parse(started_at) + timeLimitMinutes * 60 * 1000).toISOString() : null;
       try{
         await dbRunAsync('BEGIN IMMEDIATE TRANSACTION');
         const inserted = await dbRunAsync(
-          'INSERT INTO exam_sessions (student_id, test_id, started_at, status) VALUES (?,?,?,?)',
-          [authorizedStudentId, test_id, started_at, 'in_progress']
+          'INSERT INTO exam_sessions (student_id, test_id, started_at, time_limit_minutes, deadline_at, status) VALUES (?,?,?,?,?,?)',
+          [authorizedStudentId, test_id, started_at, timeLimitMinutes, deadlineAt, 'in_progress']
         );
         await storeExamSessionQuestionPlan(inserted.lastID, test_id, test && test.randomize === 1);
         await dbRunAsync('COMMIT');
-        return res.json({ id: inserted.lastID, student_id: authorizedStudentId, test_id, started_at, status: 'in_progress' });
+        return res.json({
+          id: inserted.lastID,
+          student_id: authorizedStudentId,
+          test_id,
+          started_at,
+          time_limit_minutes: timeLimitMinutes,
+          deadline_at: deadlineAt,
+          server_now: new Date().toISOString(),
+          status: 'in_progress'
+        });
       }catch(err){
         try{
           await dbRunAsync('ROLLBACK');
@@ -2353,64 +2395,85 @@ app.delete('/api/exam-sessions/:id', requireTeacher, (req, res) => {
   });
 });
 
-// Finish an exam session: compute score from answers linked to session_id (fallback to student/test answers)
+// Finish an exam session: compute score from answers linked to session_id
 app.put('/api/exam-sessions/:id/finish', (req, res) => {
   const id = req.params.id;
   const finished_at = new Date().toISOString();
   db.get('SELECT * FROM exam_sessions WHERE id=?', [id], (err, session) => {
     if(err) return res.status(500).json({ error: err.message });
     if(!session) return res.status(404).json({ error: 'session_not_found' });
-    authorizeStudentTestAccess(req, res, session.test_id, session.student_id, () => {
-      db.all('SELECT id, points FROM questions WHERE test_id=?', [session.test_id], (err2, questions) => {
-        if(err2) return res.status(500).json({ error: err2.message });
-        const qids = (questions || []).map(q => q.id);
-        if(qids.length === 0){
-          const duration = session.started_at ? Math.max(0, Math.round((Date.parse(finished_at) - Date.parse(session.started_at))/1000)) : null;
-          db.run('UPDATE exam_sessions SET finished_at=?, duration_sec=?, score=?, max_score=?, percent=?, status=? WHERE id=?', [finished_at, duration, 0, 0, 0, 'completed', id], function(eu){
-            if(eu) return res.status(500).json({ error: eu.message });
-            db.get('SELECT * FROM exam_sessions WHERE id=?', [id], (e, updated) => { if(e) return res.status(500).json({ error: e.message }); res.json(updated); });
-          });
-          return;
-        }
-        db.all(`SELECT * FROM choices WHERE question_id IN (${qids.join(',')})`, (err3, choices) => {
-          if(err3) return res.status(500).json({ error: err3.message });
-          db.all('SELECT * FROM student_answers WHERE session_id=? AND student_id=? AND test_id=?', [id, session.student_id, session.test_id], (err4, answers) => {
-            if(err4) return res.status(500).json({ error: err4.message });
-            const proceedWith = (answers && answers.length > 0) ? answers : null;
-            if(!proceedWith){
-              db.all('SELECT * FROM student_answers WHERE student_id=? AND test_id=?', [session.student_id, session.test_id], (err5, fallbackAnswers) => {
-                if(err5) return res.status(500).json({ error: err5.message });
-                computeAndSave(fallbackAnswers);
-              });
-            } else {
-              computeAndSave(proceedWith);
-            }
+    authorizeStudentTestAccess(req, res, session.test_id, session.student_id, ({ test }) => {
+      (async () => {
+        try{
+          await dbRunAsync('BEGIN IMMEDIATE TRANSACTION');
 
-            function computeAndSave(answersForSession){
-              const choicesMap = {};
-              (choices || []).forEach(ch => { choicesMap[ch.question_id] = choicesMap[ch.question_id] || []; choicesMap[ch.question_id].push(ch); });
-              const answersMap = {};
-              (answersForSession || []).forEach(a => { answersMap[a.question_id] = answersMap[a.question_id] || []; if(a.choice_id !== null && typeof a.choice_id !== 'undefined') answersMap[a.question_id].push(a.choice_id); });
-              let total = 0, earned = 0;
-              (questions || []).forEach(q => {
-                const correctIds = (choicesMap[q.id] || []).filter(x => x.is_correct==1).map(x => x.id);
-                total += q.points || 1;
-                const given = Array.from(new Set((answersMap[q.id] || []).map(x => parseInt(x, 10))));
-                if(given.length === 0) return;
-                const s1 = new Set(given);
-                const s2 = new Set(correctIds.map(x => parseInt(x, 10)));
-                if(s1.size === s2.size && [...s1].every(x => s2.has(x))) earned += q.points || 1;
-              });
-              const percent = total>0 ? (earned/total*100) : 0;
-              const duration = session.started_at ? Math.max(0, Math.round((Date.parse(finished_at) - Date.parse(session.started_at))/1000)) : null;
-              db.run('UPDATE exam_sessions SET finished_at=?, duration_sec=?, score=?, max_score=?, percent=?, status=? WHERE id=?', [finished_at, duration, earned, total, percent, 'completed', id], function(upErr){
-                if(upErr) return res.status(500).json({ error: upErr.message });
-                db.get('SELECT * FROM exam_sessions WHERE id=?', [id], (e, updated) => { if(e) return res.status(500).json({ error: e.message }); res.json(updated); });
-              });
+          const currentAnswer = req.body && req.body.current_answer ? req.body.current_answer : null;
+          const shouldApplyCurrentAnswer = currentAnswer
+            && req.body
+            && req.body.reason === 'time_limit'
+            && !(session.status === 'completed' || session.finished_at);
+          if(shouldApplyCurrentAnswer){
+            const submittedChoiceIds = normalizeSubmittedChoiceIds(currentAnswer);
+            if(submittedChoiceIds.length){
+              await saveSessionAnswer(session, test, currentAnswer.question_id, submittedChoiceIds, { replaceExisting: true });
             }
+          }
+
+          const questions = await dbAllAsync('SELECT id, points FROM questions WHERE test_id=?', [session.test_id]);
+          const qids = (questions || []).map(q => q.id);
+          let choices = [];
+          if(qids.length){
+            choices = await dbAllAsync(`SELECT * FROM choices WHERE question_id IN (${qids.join(',')})`);
+          }
+          const answers = await dbAllAsync(
+            'SELECT * FROM student_answers WHERE session_id=? AND student_id=? AND test_id=?',
+            [id, session.student_id, session.test_id]
+          );
+
+          const choicesMap = {};
+          (choices || []).forEach(ch => {
+            choicesMap[ch.question_id] = choicesMap[ch.question_id] || [];
+            choicesMap[ch.question_id].push(ch);
           });
-        });
-      });
+          const answersMap = {};
+          (answers || []).forEach(a => {
+            answersMap[a.question_id] = answersMap[a.question_id] || [];
+            if(a.choice_id !== null && typeof a.choice_id !== 'undefined') answersMap[a.question_id].push(a.choice_id);
+          });
+
+          let total = 0;
+          let earned = 0;
+          (questions || []).forEach(q => {
+            const correctIds = (choicesMap[q.id] || []).filter(x => x.is_correct==1).map(x => x.id);
+            total += q.points || 1;
+            const given = Array.from(new Set((answersMap[q.id] || []).map(x => parseInt(x, 10))));
+            if(given.length === 0) return;
+            const s1 = new Set(given);
+            const s2 = new Set(correctIds.map(x => parseInt(x, 10)));
+            if(s1.size === s2.size && [...s1].every(x => s2.has(x))) earned += q.points || 1;
+          });
+
+          const percent = total>0 ? (earned/total*100) : 0;
+          const duration = session.started_at ? Math.max(0, Math.round((Date.parse(finished_at) - Date.parse(session.started_at))/1000)) : null;
+          await dbRunAsync(
+            'UPDATE exam_sessions SET finished_at=?, duration_sec=?, score=?, max_score=?, percent=?, status=? WHERE id=?',
+            [finished_at, duration, earned, total, percent, 'completed', id]
+          );
+          const updated = await dbGetAsync('SELECT * FROM exam_sessions WHERE id=?', [id]);
+          await dbRunAsync('COMMIT');
+          return res.json(Object.assign({}, updated, {
+            finish_reason: req.body && req.body.reason === 'time_limit' ? 'time_limit' : null,
+            time_limit_exceeded: isSessionTimeLimitExpired(session, Date.parse(finished_at))
+          }));
+        }catch(err2){
+          try{
+            await dbRunAsync('ROLLBACK');
+          }catch(_rollbackErr){
+            // surface the original error
+          }
+          return res.status(err2 && err2.statusCode ? err2.statusCode : 500).json({ error: err2 && err2.message ? err2.message : 'internal_error' });
+        }
+      })();
     });
   });
 });

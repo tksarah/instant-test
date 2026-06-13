@@ -50,6 +50,7 @@ db.serialize(() => {
     public INTEGER DEFAULT 0,
     randomize INTEGER DEFAULT 0,
     answer_mode TEXT DEFAULT 'deferred_summary',
+    time_limit_minutes INTEGER,
     FOREIGN KEY(class_id) REFERENCES classes(id)
   );`);
 
@@ -138,6 +139,13 @@ db.serialize(() => {
     } else {
       db.run("UPDATE tests SET answer_mode='deferred_summary' WHERE answer_mode IS NULL OR TRIM(answer_mode)=''", (e) => {
         if(e){ console.error('Failed to normalize answer_mode in tests:', e.message); }
+      });
+    }
+    const hasTimeLimitMinutes = rows && rows.some(r => r.name === 'time_limit_minutes');
+    if(!hasTimeLimitMinutes){
+      db.run("ALTER TABLE tests ADD COLUMN time_limit_minutes INTEGER", (e) => {
+        if(e){ console.error('Failed to add time_limit_minutes column to tests:', e.message); }
+        else { console.log('Added time_limit_minutes column to tests'); }
       });
     }
   });
@@ -233,10 +241,30 @@ db.serialize(() => {
     score INTEGER,
     max_score INTEGER,
     percent REAL,
+    time_limit_minutes INTEGER,
+    deadline_at TEXT,
     status TEXT DEFAULT 'in_progress',
     FOREIGN KEY(student_id) REFERENCES students(id),
     FOREIGN KEY(test_id) REFERENCES tests(id)
   );`);
+
+  db.all("PRAGMA table_info('exam_sessions')", (err, rows) => {
+    if(err) return;
+    const hasTimeLimitMinutes = rows && rows.some(r => r.name === 'time_limit_minutes');
+    if(!hasTimeLimitMinutes){
+      db.run("ALTER TABLE exam_sessions ADD COLUMN time_limit_minutes INTEGER", (e) => {
+        if(e){ console.error('Failed to add time_limit_minutes column to exam_sessions:', e.message); }
+        else { console.log('Added time_limit_minutes column to exam_sessions'); }
+      });
+    }
+    const hasDeadlineAt = rows && rows.some(r => r.name === 'deadline_at');
+    if(!hasDeadlineAt){
+      db.run("ALTER TABLE exam_sessions ADD COLUMN deadline_at TEXT", (e) => {
+        if(e){ console.error('Failed to add deadline_at column to exam_sessions:', e.message); }
+        else { console.log('Added deadline_at column to exam_sessions'); }
+      });
+    }
+  });
 
   db.run(`CREATE TABLE IF NOT EXISTS exam_session_questions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
