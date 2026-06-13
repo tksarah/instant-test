@@ -1010,6 +1010,80 @@ legend{padding:0 8px;color:var(--text-strong);font-weight:700}
   grid-template-columns:minmax(220px,280px) minmax(0,1fr);
   gap:16px;
 }
+.report-class-summary__metrics{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+  gap:10px;
+}
+.report-class-summary__metric{
+  display:grid;
+  gap:4px;
+  min-width:0;
+  padding:12px;
+  border:1px solid var(--border-soft);
+  border-radius:8px;
+  background:#f8fafc;
+}
+.report-class-summary__metric span{
+  color:var(--text-muted);
+  font-size:12px;
+  font-weight:700;
+}
+.report-class-summary__metric strong{
+  color:var(--text-strong);
+  font-size:22px;
+  line-height:1.15;
+}
+.report-class-summary__metric small{
+  color:var(--text-soft);
+  font-size:12px;
+}
+.report-class-summary__tests{
+  overflow:hidden;
+}
+.report-class-summary__table-wrap{
+  overflow-x:auto;
+}
+.report-class-summary__table{
+  width:100%;
+  min-width:620px;
+  border-collapse:collapse;
+}
+.report-class-summary__table th,
+.report-class-summary__table td{
+  padding:10px 8px;
+  border-bottom:1px solid rgba(15,23,42,0.08);
+  text-align:left;
+  font-size:13px;
+  white-space:nowrap;
+}
+.report-class-summary__table th{
+  color:var(--color-main);
+  font-weight:800;
+}
+.report-class-summary__table tbody tr:last-child td{
+  border-bottom:0;
+}
+.report-class-summary__test-name{
+  display:block;
+  min-width:0;
+  max-width:260px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  color:var(--text-strong);
+  font-weight:700;
+}
+.report-class-summary__percent{
+  display:inline-flex;
+  align-items:center;
+  min-height:26px;
+  padding:0 9px;
+  border-radius:999px;
+  background:#eef3f8;
+  color:var(--color-main);
+  font-weight:800;
+}
 .report-chart-card{
   background:linear-gradient(180deg,#fcfdff,#f7fafc);
   border:1px solid var(--border-soft);
@@ -1090,6 +1164,7 @@ legend{padding:0 8px;color:var(--text-strong);font-weight:700}
 .reports-table tbody td{background:#fff;padding:14px 16px;border-bottom:1px solid rgba(16,30,60,0.04);vertical-align:middle;font-size:14px;color:#122}
 .reports-table tbody tr:hover td{background:linear-gradient(90deg,rgba(245,249,255,0.85),#ffffff)}
 .reports-table .testName{font-weight:600;color:#0f1724}
+.reports-table .report-class-name{font-weight:700;color:var(--color-main)}
 .reports-table .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,"Roboto Mono","Noto Mono",monospace}
 .reports-table .score{display:inline-block;padding:6px 10px;border-radius:999px;font-weight:700;font-size:13px;background:#eef6ff;color:#1f5fa8}
 .reports-table .score.low{background:#fff0f0;color:#b33}

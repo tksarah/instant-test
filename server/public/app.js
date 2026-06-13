@@ -2954,10 +2954,26 @@
     );
 
     // Reports view (integrated)
+    function getReportClassId(row){
+      return row && (row.studentClassId || row.student_class_id || row.classId || row.class_id || '');
+    }
+
+    function getReportClassName(row){
+      const directName = row && (row.studentClassName || row.student_class_name || row.className || row.class_name || '');
+      if(directName) return directName;
+      const classId = getReportClassId(row);
+      const matchedClass = classId ? (classes || []).find(function(c){ return String(c.id) === String(classId); }) : null;
+      return matchedClass ? matchedClass.name : '';
+    }
+
+    function getReportStudentKey(row){
+      return row && (row.studentId || row.student_id || row.studentName || '');
+    }
+
       const filteredReports = (reports || []).filter(r => {
         const tn = (r.testName || '').toLowerCase();
       const un = (r.studentName || '').toLowerCase();
-      const rowClassId = r.classId || r.class_id || '';
+      const rowClassId = getReportClassId(r);
         // If a test is selected from the dropdown, match exact test name (case-insensitive)
         if(reportFilterTest && tn !== (reportFilterTest||'').toLowerCase()) return false;
       if(reportFilterClassId && String(rowClassId) !== String(reportFilterClassId)) return false;
@@ -2990,7 +3006,10 @@
         let va = a[key];
         let vb = b[key];
         // normalize for known keys
-        if(key === 'studentName' || key === 'testName'){
+        if(key === 'className'){
+          va = String(getReportClassName(a) || '').toLowerCase();
+          vb = String(getReportClassName(b) || '').toLowerCase();
+        } else if(key === 'studentName' || key === 'testName'){
           va = String(va || '').toLowerCase(); vb = String(vb || '').toLowerCase();
         } else if(key === 'percent' || key === 'score' || key === 'maxScore'){
           va = Number(va || 0); vb = Number(vb || 0);
@@ -3009,11 +3028,11 @@
     const pageSlice = sortedReports.slice((currentPage-1)*reportsPerPage, currentPage*reportsPerPage);
 
     function exportReportsCSV(){
-      // CSV columns aligned with visible table: 日時, studentName, testName, score, maxScore, percent
-      const rows = [['日時','studentName','testName','score','maxScore','percent']];
+      // CSV columns aligned with visible table: 日時, studentName, className, testName, score, maxScore, percent
+      const rows = [['日時','studentName','className','testName','score','maxScore','percent']];
       filteredReports.forEach(r=> {
         const dt = r.finished_at || r.started_at || '';
-        rows.push([dt || '記録なし', r.studentName||'', r.testName||'', r.score||0, r.maxScore||0, Math.round((r.percent||0)*100)/100]);
+        rows.push([dt || '記録なし', r.studentName||'', getReportClassName(r) || '', r.testName||'', r.score||0, r.maxScore||0, Math.round((r.percent||0)*100)/100]);
       });
       const csv = rows.map(r=> r.map(c=> '"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n');
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -3021,10 +3040,58 @@
       const a = document.createElement('a'); a.href = url; a.download = 'reports.csv'; a.click(); URL.revokeObjectURL(url);
     }
 
-    const averageReportPercent = filteredReports.length
-      ? Math.round(filteredReports.reduce(function(sum, r){ return sum + Number(r.percent || 0); }, 0) / filteredReports.length)
-      : 0;
-    const uniqueStudentsCount = Array.from(new Set(filteredReports.map(function(r){ return r.studentId || r.studentName || ''; }).filter(Boolean))).length;
+    function getAverageReportPercent(rows){
+      return rows.length
+        ? Math.round(rows.reduce(function(sum, r){ return sum + Number(r.percent || 0); }, 0) / rows.length)
+        : 0;
+    }
+
+    function buildReportClassTestSummaries(rows){
+      const byTest = {};
+      (rows || []).forEach(function(row){
+        const testId = row.testId || row.test_id || '';
+        const testName = row.testName || '不明なテスト';
+        const key = testId ? ('id:' + testId) : ('name:' + testName);
+        byTest[key] = byTest[key] || {
+          key: key,
+          testId: testId,
+          testName: testName,
+          count: 0,
+          score: 0,
+          maxScore: 0,
+          percentTotal: 0,
+          students: new Set()
+        };
+        byTest[key].count += 1;
+        byTest[key].score += Number(row.score || 0);
+        byTest[key].maxScore += Number(row.maxScore || row.max_score || 0);
+        byTest[key].percentTotal += Number(row.percent || 0);
+        const studentKey = getReportStudentKey(row);
+        if(studentKey) byTest[key].students.add(String(studentKey));
+      });
+      return Object.keys(byTest).map(function(key){
+        const item = byTest[key];
+        return {
+          key: item.key,
+          testId: item.testId,
+          testName: item.testName,
+          count: item.count,
+          studentCount: item.students.size,
+          score: item.score,
+          maxScore: item.maxScore,
+          averagePercent: item.count ? Math.round(item.percentTotal / item.count) : 0
+        };
+      }).sort(function(a, b){
+        return String(a.testName || '').localeCompare(String(b.testName || ''), 'ja');
+      });
+    }
+
+    const averageReportPercent = getAverageReportPercent(filteredReports);
+    const uniqueStudentsCount = Array.from(new Set(filteredReports.map(function(r){ return getReportStudentKey(r); }).filter(Boolean))).length;
+    const selectedReportClass = reportFilterClassId
+      ? (classes || []).find(function(c){ return String(c.id || '') === String(reportFilterClassId || ''); })
+      : null;
+    const selectedReportClassName = selectedReportClass ? selectedReportClass.name : '';
     const selectedReportTest = reportFilterTest
       ? (tests || []).find(function(t){ return String(t.name || '') === String(reportFilterTest || ''); })
       : null;
@@ -3035,6 +3102,9 @@
     const selectedReportRowsKey = selectedReportRows.map(function(row, index){
       return [row.sessionId || '', row.studentId || '', row.finished_at || row.started_at || '', index].join('|');
     }).join('::');
+    const selectedClassTestSummaries = (selectedReportClass && !selectedReportTest)
+      ? buildReportClassTestSummaries(filteredReports)
+      : [];
 
     function buildSummaryFromAnswerRows(questionsForTest, answerRows, sessionId){
       const scopedRows = (answerRows || []).filter(function(answer){
@@ -3151,6 +3221,8 @@
         setReportFilterAnalytics({
           testId: selectedReportTest.id,
           testName: selectedReportTest.name || reportFilterTest,
+          classId: selectedReportClass ? selectedReportClass.id : '',
+          className: selectedReportClassName,
           averagePercent: averageReportPercent,
           sampleSize: matchingRows.length,
           questionRates: questionRates,
@@ -3162,6 +3234,8 @@
         setReportFilterAnalytics({
           testId: selectedReportTest.id,
           testName: selectedReportTest.name || reportFilterTest,
+          classId: selectedReportClass ? selectedReportClass.id : '',
+          className: selectedReportClassName,
           averagePercent: averageReportPercent,
           sampleSize: matchingRows.length,
           questionRates: [],
@@ -3173,7 +3247,7 @@
       return function(){
         cancelled = true;
       };
-    }, [mode, selectedReportTest, selectedReportTestId, selectedReportRowsKey, averageReportPercent]);
+    }, [mode, selectedReportTest, selectedReportTestId, selectedReportRowsKey, averageReportPercent, reportFilterClassId, selectedReportClassName]);
 
     function makeSortHandler(key){
       return function(){
@@ -3205,11 +3279,15 @@
       const donutStyle = {
         background: 'conic-gradient(var(--color-accent) 0 ' + donutPercent + '%, #dfe8f2 ' + donutPercent + '% 100%)'
       };
+      const analyticsScopeLabel = [
+        reportFilterAnalytics.testName || 'テスト',
+        reportFilterAnalytics.className || ''
+      ].filter(Boolean).join(' / ');
 
       return e('div', { className: 'report-filter-analytics' },
         e('div', { className: 'report-filter-analytics__header' },
-          e('strong', null, '選択中テストの集計'),
-          e('span', { className: 'small' }, (reportFilterAnalytics.testName || 'テスト') + ' / ' + String(reportFilterAnalytics.sampleSize || 0) + '件')
+          e('strong', null, reportFilterAnalytics.className ? '選択中テスト・クラスの集計' : '選択中テストの集計'),
+          e('span', { className: 'small' }, analyticsScopeLabel + ' / ' + String(reportFilterAnalytics.sampleSize || 0) + '件')
         ),
         e('div', { className: 'report-filter-analytics__grid' },
           e('section', { className: 'report-chart-card' },
@@ -3247,6 +3325,62 @@
                       )
                 )
           )
+        )
+      );
+    }
+
+    function renderClassSummaryMetric(label, value, note){
+      return e('div', { key: label, className: 'report-class-summary__metric' },
+        e('span', null, label),
+        e('strong', null, value),
+        note ? e('small', null, note) : null
+      );
+    }
+
+    function renderReportClassSummary(){
+      if(!selectedReportClass || selectedReportTest){
+        return null;
+      }
+
+      return e('div', { className: 'report-filter-analytics report-class-summary' },
+        e('div', { className: 'report-filter-analytics__header' },
+          e('strong', null, '選択中クラスの集計'),
+          e('span', { className: 'small' }, (selectedReportClassName || 'クラス') + ' / ' + String(totalReports) + '件')
+        ),
+        e('div', { className: 'report-class-summary__metrics' }, [
+          renderClassSummaryMetric('対象件数', String(totalReports), '現在の絞り込み結果'),
+          renderClassSummaryMetric('平均正答率', averageReportPercent + '%', '受験記録ごとの平均'),
+          renderClassSummaryMetric('受験者', String(uniqueStudentsCount), 'ユニーク人数'),
+          renderClassSummaryMetric('対象テスト', String(selectedClassTestSummaries.length), 'テスト別内訳')
+        ]),
+        e('section', { className: 'report-chart-card report-class-summary__tests' },
+          e('div', { className: 'report-chart-card__title' }, 'テスト別内訳'),
+          selectedClassTestSummaries.length
+            ? e('div', { className: 'report-class-summary__table-wrap' },
+                e('table', { className: 'report-class-summary__table' },
+                  e('thead', null,
+                    e('tr', null,
+                      e('th', null, 'テスト名'),
+                      e('th', null, '件数'),
+                      e('th', null, '受験者'),
+                      e('th', null, '平均正答率'),
+                      e('th', null, '得点')
+                    )
+                  ),
+                  e('tbody', null,
+                    selectedClassTestSummaries.map(function(item){
+                      return e('tr', { key: item.key },
+                        e('td', null, e('span', { className: 'report-class-summary__test-name' }, item.testName || '不明なテスト')),
+                        e('td', null, String(item.count)),
+                        e('td', null, String(item.studentCount)),
+                        e('td', null, e('span', { className: 'report-class-summary__percent' }, item.averagePercent + '%')),
+                        e('td', null, String(item.score) + ' / ' + String(item.maxScore))
+                      );
+                    })
+                  )
+                )
+              )
+            : e('div', { className: 'small' }, '対象データがありません')
         )
       );
     }
@@ -3333,7 +3467,8 @@
           e('button', { onClick: fetchReports, className: 'btn btn-primary', type: 'button' }, '更新'),
           e('button', { onClick: exportReportsCSV, className: 'btn btn-ghost', type: 'button' }, 'CSV出力')
         ),
-        renderReportFilterAnalytics()
+        renderReportFilterAnalytics(),
+        renderReportClassSummary()
       ),
       e('section', { className: 'task-section-card' },
         e('div', { className: 'task-section-heading' },
@@ -3345,18 +3480,20 @@
         e('div', { className: 'reports-layout' },
           e('div', { className: 'reports-main', style: { width: '100%' } },
             e('table', { className: 'reports-table' },
-              e('thead', null, e('tr', null, e('th', null, renderSortLabel('日時','finished_at')), e('th', null, renderSortLabel('生徒名','studentName')), e('th', null, renderSortLabel('テスト名','testName')), e('th', null, renderSortLabel('得点','score')), e('th', null, e('span', null, '満点')), e('th', null, renderSortLabel('正答率','percent')), e('th', null, '操作'))),
+              e('thead', null, e('tr', null, e('th', null, renderSortLabel('日時','finished_at')), e('th', null, renderSortLabel('生徒名','studentName')), e('th', null, renderSortLabel('クラス','className')), e('th', null, renderSortLabel('テスト名','testName')), e('th', null, renderSortLabel('得点','score')), e('th', null, e('span', null, '満点')), e('th', null, renderSortLabel('正答率','percent')), e('th', null, '操作'))),
               e('tbody', null,
-                pageSlice.length === 0 ? e('tr', null, e('td', { colSpan: 7, className: 'small' }, reportsLoading ? '読み込み中...' : '該当するテストがありません')) : pageSlice.map(function(row, idx){
+                pageSlice.length === 0 ? e('tr', null, e('td', { colSpan: 8, className: 'small' }, reportsLoading ? '読み込み中...' : '該当するテストがありません')) : pageSlice.map(function(row, idx){
                   const keyId = (row.studentId||'')+'-'+(row.testId||'')+'-'+idx;
                   const pct = Math.round((row.percent||0)*100)/100;
                   const pctClass = pct >= 70 ? 'score high' : (pct >= 40 ? 'score' : 'score low');
                   const dtRaw = row.finished_at || row.started_at || '';
                   let dtDisp = '記録なし';
                   try{ if(dtRaw) dtDisp = new Date(dtRaw).toLocaleString(); }catch(e){ dtDisp = dtRaw || '記録なし'; }
+                  const rowClassName = getReportClassName(row) || '—';
                   return e('tr', { key: keyId },
                     e('td', null, dtDisp),
                     e('td', null, e('span', null, row.studentName || '—')),
+                    e('td', null, e('span', { className: 'report-class-name' }, rowClassName)),
                     e('td', null, e('div', { className: 'testName' }, row.testName || '—')),
                     e('td', null, e('span', { className: 'mono' }, String(row.score || 0))),
                     e('td', null, e('span', { className: 'mono' }, String(row.maxScore || 0))),

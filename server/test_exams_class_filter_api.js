@@ -93,16 +93,25 @@ function assert(condition, message){
       return row && String(row.testId || '') === String(testId);
     });
     assert(allRows.length === 2, '対象テストの受験結果が2件必要です');
-    assert(allRows.every(function(row){ return String(row.classId || '') === String(classIdA) && row.className; }), 'テスト紐付け class 情報が返却されていません');
-    assert(allRows.some(function(row){ return String(row.studentClassId || '') === String(classIdB); }), '生徒所属クラス情報の確認データが不足しています');
+    assert(allRows.every(function(row){ return row.className && row.studentClassName; }), '受験者所属クラス情報が返却されていません');
+    assert(allRows.some(function(row){ return String(row.classId || '') === String(classIdA) && String(row.studentClassId || '') === String(classIdA); }), 'Class A の受験結果が不足しています');
+    assert(allRows.some(function(row){ return String(row.classId || '') === String(classIdB) && String(row.studentClassId || '') === String(classIdB); }), 'Class B の受験結果が不足しています');
 
     const filteredRes = await req('GET', '/api/exams?class_id=' + encodeURIComponent(classIdA), null, teacherCookie);
     assert(filteredRes.status === 200 && Array.isArray(filteredRes.body), 'class_id 指定の受験結果取得に失敗しました');
     const filteredRows = filteredRes.body.filter(function(row){
       return row && String(row.testId || '') === String(testId);
     });
-    assert(filteredRows.length === 2, 'class_id 絞り込みはテスト紐付けクラスの受験結果をすべて返す必要があります');
-    assert(filteredRows.every(function(row){ return String(row.classId || '') === String(classIdA); }), 'class_id 絞り込み結果の classId が不正です');
+    assert(filteredRows.length === 1, 'class_id 絞り込みは受験者所属クラスの結果だけを返す必要があります');
+    assert(filteredRows.every(function(row){ return String(row.classId || '') === String(classIdA) && String(row.studentClassId || '') === String(classIdA); }), 'class_id 絞り込み結果の classId が不正です');
+
+    const filteredResB = await req('GET', '/api/exams?class_id=' + encodeURIComponent(classIdB), null, teacherCookie);
+    assert(filteredResB.status === 200 && Array.isArray(filteredResB.body), 'class_id 指定の受験結果取得に失敗しました');
+    const filteredRowsB = filteredResB.body.filter(function(row){
+      return row && String(row.testId || '') === String(testId);
+    });
+    assert(filteredRowsB.length === 1, '別クラスの class_id 絞り込み結果が不正です');
+    assert(filteredRowsB.every(function(row){ return String(row.classId || '') === String(classIdB) && String(row.studentClassId || '') === String(classIdB); }), '別クラスの class_id 絞り込み結果の classId が不正です');
 
     console.log('exam reports class filter checks passed');
   }catch(err){
