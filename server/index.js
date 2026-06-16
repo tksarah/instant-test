@@ -446,6 +446,23 @@ function normalizeSubmittedChoiceIds(source){
   return Array.from(new Set(submitted));
 }
 
+function buildStudentAnswerErrorPayload(errorCode, extra){
+  const messages = {
+    forbidden: '参加情報を確認できませんでした。もう一度テストを開いてください',
+    invalid_choice_id: '選択肢の情報を確認できませんでした。もう一度選択してください',
+    invalid_question_id: '問題の情報を確認できませんでした。もう一度テストを開いてください',
+    question_already_answered: 'この問題はすでに送信済みです',
+    question_not_in_session: 'この問題は現在のテストに含まれていません',
+    question_out_of_order: '回答順がずれました。続きの問題から再開してください',
+    session_completed: 'このテストはすでに提出済みです',
+    'session_id required': 'セッション情報を確認できませんでした。もう一度テストを開いてください',
+    time_limit_exceeded: '制限時間が終了しました'
+  };
+  const payload = Object.assign({ error: errorCode }, extra || {});
+  if(messages[errorCode]) payload.message = messages[errorCode];
+  return payload;
+}
+
 function normalizeTeacherNote(value){
   if(typeof value !== 'string') return '';
   return value.slice(0, 1000);
@@ -1625,10 +1642,24 @@ app.get('/api/test-sets/:id/summary', requireTeacher, async (req, res) => {
     );
     const testPlaceholders = testIds.map(() => '?').join(',');
     const studentIds = students.map(student => student.id);
-    let sessions = [];
+    let completedSessions = [];
+    let latestSessions = [];
     if(studentIds.length){
       const studentPlaceholders = studentIds.map(() => '?').join(',');
-      sessions = await dbAllAsync(
+      completedSessions = await dbAllAsync(
+        `SELECT es.*
+         FROM exam_sessions es
+         JOIN (
+           SELECT student_id, test_id, MAX(id) AS id
+           FROM exam_sessions
+           WHERE student_id IN (${studentPlaceholders})
+             AND test_id IN (${testPlaceholders})
+             AND finished_at IS NOT NULL
+           GROUP BY student_id, test_id
+         ) latest ON latest.id=es.id`,
+        studentIds.concat(testIds)
+      );
+      latestSessions = await dbAllAsync(
         `SELECT es.*
          FROM exam_sessions es
          JOIN (
@@ -1641,9 +1672,13 @@ app.get('/api/test-sets/:id/summary', requireTeacher, async (req, res) => {
         studentIds.concat(testIds)
       );
     }
-    const byStudentTest = {};
-    sessions.forEach(session => {
-      byStudentTest[session.student_id + ':' + session.test_id] = session;
+    const completedByStudentTest = {};
+    completedSessions.forEach(session => {
+      completedByStudentTest[session.student_id + ':' + session.test_id] = session;
+    });
+    const latestByStudentTest = {};
+    latestSessions.forEach(session => {
+      latestByStudentTest[session.student_id + ':' + session.test_id] = session;
     });
     let completedTests = 0;
     let score = 0;
@@ -1654,16 +1689,18 @@ app.get('/api/test-sets/:id/summary', requireTeacher, async (req, res) => {
       let studentScore = 0;
       let studentMax = 0;
       const testsForStudent = (set.items || []).map(item => {
-        const session = byStudentTest[student.id + ':' + item.id] || null;
-        const completed = !!(session && (session.status === 'completed' || session.finished_at));
+        const completedSession = completedByStudentTest[student.id + ':' + item.id] || null;
+        const latestSession = latestByStudentTest[student.id + ':' + item.id] || null;
+        const session = completedSession || latestSession || null;
+        const completed = !!completedSession;
         if(completed){
           studentCompleted++;
           completedTests++;
-          studentScore += session.score || 0;
-          studentMax += session.max_score || 0;
-          score += session.score || 0;
-          maxScore += session.max_score || 0;
-        } else if(session) {
+          studentScore += completedSession.score || 0;
+          studentMax += completedSession.max_score || 0;
+          score += completedSession.score || 0;
+          maxScore += completedSession.max_score || 0;
+        } else if(latestSession) {
           studentInProgress++;
         }
         return {
@@ -2084,11 +2121,14 @@ app.post('/api/students', (req, res) => {
 // Submit an answer (single or multiple)
 app.post('/api/submit-answer', (req, res) => {
   const { student_id, test_id, question_id, choice_id, choice_ids, session_id } = req.body;
-  if(!student_id || !test_id || !question_id) return res.status(400).json({ error: 'student_id,test_id,question_id required' });
+  if(!student_id || !test_id || !question_id) return res.status(400).json({
+    error: 'student_id,test_id,question_id required',
+    message: '回答に必要な情報を確認できませんでした。もう一度テストを開いてください'
+  });
   authorizeStudentTestAccess(req, res, test_id, student_id, ({ studentId: authorizedStudentId, test }) => {
     (async () => {
       const normalizedSessionId = parseInt(session_id, 10);
-      if(!normalizedSessionId) return res.status(400).json({ error: 'session_id required' });
+      if(!normalizedSessionId) return res.status(400).json(buildStudentAnswerErrorPayload('session_id required'));
 
       const uniqueSubmitted = normalizeSubmittedChoiceIds({ choice_id, choice_ids });
       const answerMode = normalizeAnswerMode(test && test.answer_mode);
@@ -2102,15 +2142,15 @@ app.post('/api/submit-answer', (req, res) => {
         );
         if(!session){
           await dbRunAsync('ROLLBACK');
-          return res.status(403).json({ error: 'forbidden' });
+          return res.status(403).json(buildStudentAnswerErrorPayload('forbidden'));
         }
         if(session.status === 'completed' || session.finished_at){
           await dbRunAsync('ROLLBACK');
-          return res.status(409).json({ error: 'session_completed' });
+          return res.status(409).json(buildStudentAnswerErrorPayload('session_completed'));
         }
         if(isSessionTimeLimitExpired(session)){
           await dbRunAsync('ROLLBACK');
-          return res.status(409).json({ error: 'time_limit_exceeded' });
+          return res.status(409).json(buildStudentAnswerErrorPayload('time_limit_exceeded'));
         }
 
         const saved = await saveSessionAnswer(session, test, question_id, uniqueSubmitted, {
@@ -2133,7 +2173,7 @@ app.post('/api/submit-answer', (req, res) => {
           // surface the original error
         }
         const statusCode = err && err.statusCode ? err.statusCode : 500;
-        const payload = { error: err && err.message ? err.message : 'internal_error' };
+        const payload = buildStudentAnswerErrorPayload(err && err.message ? err.message : 'internal_error');
         if(err && err.expected_question_id) payload.expected_question_id = err.expected_question_id;
         return res.status(statusCode).json(payload);
       }
@@ -2163,15 +2203,15 @@ app.put('/api/exam-sessions/:sessionId/answers/:questionId', (req, res) => {
         );
         if(!session){
           await dbRunAsync('ROLLBACK');
-          return res.status(403).json({ error: 'forbidden' });
+          return res.status(403).json(buildStudentAnswerErrorPayload('forbidden'));
         }
         if(session.status === 'completed' || session.finished_at){
           await dbRunAsync('ROLLBACK');
-          return res.status(409).json({ error: 'session_completed' });
+          return res.status(409).json(buildStudentAnswerErrorPayload('session_completed'));
         }
         if(isSessionTimeLimitExpired(session)){
           await dbRunAsync('ROLLBACK');
-          return res.status(409).json({ error: 'time_limit_exceeded' });
+          return res.status(409).json(buildStudentAnswerErrorPayload('time_limit_exceeded'));
         }
 
         await saveSessionAnswer(session, test, questionId, uniqueSubmitted, { replaceExisting: true });
@@ -2235,6 +2275,7 @@ app.get('/api/exams', requireTeacher, (req, res) => {
       const params = [];
       conds.push('t.teacher_id=?');
       params.push(req.teacher.id);
+      conds.push('es.finished_at IS NOT NULL');
       if(test_id){ conds.push('es.test_id=?'); params.push(test_id); }
       if(student_id){ conds.push('es.student_id=?'); params.push(student_id); }
       if(class_id){ conds.push('s.class_id=?'); params.push(class_id); }
@@ -2242,8 +2283,8 @@ app.get('/api/exams', requireTeacher, (req, res) => {
       if(conds.length) sql += ' WHERE ' + conds.join(' AND ');
       sql += ' ORDER BY es.finished_at DESC';
       db.all(sql, params, (e, sessions) => {
-        if(!e && sessions && sessions.length > 0){
-          const out = sessions.map(s => ({
+        if(!e){
+          const out = (sessions || []).map(s => ({
             sessionId: s.id,
             studentId: s.student_id,
             studentName: s.studentName,
@@ -2261,19 +2302,24 @@ app.get('/api/exams', requireTeacher, (req, res) => {
             duration_sec: s.duration_sec,
             status: s.status
           }));
-          return res.json(out);
+          return legacyAggregation(out, { hasExamSessionsTable: true });
         }
-        // fallback to legacy aggregation if no sessions found
-        legacyAggregation();
+        legacyAggregation([], { hasExamSessionsTable: true });
       });
     } else {
-      legacyAggregation();
+      legacyAggregation([], { hasExamSessionsTable: false });
     }
   });
 
-  function legacyAggregation(){
+  function legacyAggregation(baseResults, options){
+    const results = Array.isArray(baseResults) ? baseResults.slice() : [];
+    const hasExamSessionsTable = !options || options.hasExamSessionsTable !== false;
     const conditions = ['t.teacher_id=?'];
     const params = [req.teacher.id];
+    conditions.push('sa.session_id IS NULL');
+    if(hasExamSessionsTable){
+      conditions.push('NOT EXISTS (SELECT 1 FROM exam_sessions es_legacy WHERE es_legacy.student_id=sa.student_id AND es_legacy.test_id=sa.test_id)');
+    }
     if(test_id){ conditions.push('sa.test_id=?'); params.push(test_id); }
     if(student_id){ conditions.push('sa.student_id=?'); params.push(student_id); }
     if(class_id){ conditions.push('s.class_id=?'); params.push(class_id); }
@@ -2281,8 +2327,7 @@ app.get('/api/exams', requireTeacher, (req, res) => {
     if(conditions.length) sql += ' WHERE ' + conditions.join(' AND ');
     db.all(sql, params, (err, combos) => {
       if(err) return res.status(500).json({ error: err.message });
-      if(!combos || combos.length === 0) return res.json([]);
-      const results = [];
+      if(!combos || combos.length === 0) return res.json(results);
       let pending = combos.length;
       combos.forEach(function(c){
         const sid = c.student_id;
@@ -2300,14 +2345,14 @@ app.get('/api/exams', requireTeacher, (req, res) => {
                 // attach latest exam_sessions timestamp when available
                 db.get('SELECT finished_at, started_at FROM exam_sessions WHERE student_id=? AND test_id=? ORDER BY finished_at DESC LIMIT 1', [sid, tid], (errSess, sessRow) => {
                   const dt = sessRow ? (sessRow.finished_at || sessRow.started_at) : null;
-                  results.push({ studentId: sid, studentName: studentRow?studentRow.name:null, studentClassId: studentRow?studentRow.studentClassId:null, studentClassName: studentRow?studentRow.studentClassName:null, classId: studentRow?studentRow.studentClassId:null, className: studentRow?studentRow.studentClassName:null, testId: tid, testName: testRow?testRow.name:null, score: 0, maxScore: 0, percent: 0, status: '完了', finished_at: dt });
+                  results.push({ studentId: sid, studentName: studentRow?studentRow.name:null, studentClassId: studentRow?studentRow.studentClassId:null, studentClassName: studentRow?studentRow.studentClassName:null, classId: studentRow?studentRow.studentClassId:null, className: studentRow?studentRow.studentClassName:null, testId: tid, testName: testRow?testRow.name:null, score: 0, maxScore: 0, percent: 0, status: 'completed', finished_at: dt });
                   pending--; if(pending===0) return res.json(results);
                 });
               } else {
                 // fetch choices for questions
                 db.all(`SELECT * FROM choices WHERE question_id IN (${qids.join(',')})`, (err4, choices) => {
                   if(err4){ pending--; if(pending===0) return res.json(results); return; }
-                  db.all('SELECT * FROM student_answers WHERE student_id=? AND test_id=?', [sid, tid], (err5, answers) => {
+                  db.all('SELECT * FROM student_answers WHERE student_id=? AND test_id=? AND session_id IS NULL', [sid, tid], (err5, answers) => {
                     if(err5){ pending--; if(pending===0) return res.json(results); return; }
                     const choicesMap = {};
                     (choices || []).forEach(ch => { choicesMap[ch.question_id] = choicesMap[ch.question_id] || []; choicesMap[ch.question_id].push(ch); });
@@ -2326,7 +2371,7 @@ app.get('/api/exams', requireTeacher, (req, res) => {
                     // attach latest exam_sessions timestamp when available
                     db.get('SELECT finished_at, started_at FROM exam_sessions WHERE student_id=? AND test_id=? ORDER BY finished_at DESC LIMIT 1', [sid, tid], (errSess, sessRow) => {
                       const dt = sessRow ? (sessRow.finished_at || sessRow.started_at) : null;
-                      results.push({ studentId: sid, studentName: studentRow?studentRow.name:null, studentClassId: studentRow?studentRow.studentClassId:null, studentClassName: studentRow?studentRow.studentClassName:null, classId: studentRow?studentRow.studentClassId:null, className: studentRow?studentRow.studentClassName:null, testId: tid, testName: testRow?testRow.name:null, score: earned, maxScore: total, percent: total>0 ? (earned/total*100) : 0, status: '完了', finished_at: dt });
+                      results.push({ studentId: sid, studentName: studentRow?studentRow.name:null, studentClassId: studentRow?studentRow.studentClassId:null, studentClassName: studentRow?studentRow.studentClassName:null, classId: studentRow?studentRow.studentClassId:null, className: studentRow?studentRow.studentClassName:null, testId: tid, testName: testRow?testRow.name:null, score: earned, maxScore: total, percent: total>0 ? (earned/total*100) : 0, status: 'completed', finished_at: dt });
                       pending--; if(pending===0) return res.json(results);
                     });
                   });

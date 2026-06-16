@@ -125,10 +125,22 @@ function assert(condition, message){
     const finish = await req('PUT', '/api/exam-sessions/' + encodeURIComponent(examSession.body.id) + '/finish', null, { Cookie: studentCookie });
     assert(finish.status === 200, 'set item finish failed');
 
+    const laterIncompleteSession = await req('POST', '/api/exam-sessions', { student_id: student.body.id, test_id: testA }, { Cookie: studentCookie });
+    assert(laterIncompleteSession.status === 200 && laterIncompleteSession.body && laterIncompleteSession.body.id, 'student should be able to start a later in-progress attempt');
+    created.examSessions.push(laterIncompleteSession.body.id);
+
     const summary = await req('GET', '/api/test-sets/' + encodeURIComponent(createdSet.body.id) + '/summary', null, teacherCookie);
     assert(summary.status === 200 && summary.body && summary.body.totals, 'set summary failed');
     assert(summary.body.totals.completed_tests === 1, 'summary should count partial completion');
     assert(summary.body.totals.possible_tests === 2, 'summary should keep possible test count');
+    assert(summary.body.totals.score === 2 && summary.body.totals.max_score === 2, 'summary should keep completed scores when a later attempt is in progress');
+    const studentSummary = (summary.body.students || []).find(row => String(row.student_id) === String(student.body.id));
+    assert(studentSummary, 'summary should include the student row');
+    const testASummary = (studentSummary.tests || []).find(row => String(row.test_id) === String(testA));
+    const testBSummary = (studentSummary.tests || []).find(row => String(row.test_id) === String(testB));
+    assert(testASummary && testASummary.status === 'completed', 'completed set item should remain completed even after a later in-progress attempt');
+    assert(testASummary.score === 2 && testASummary.max_score === 2, 'completed set item should keep its score');
+    assert(testBSummary && testBSummary.status !== 'completed' && testBSummary.score === 0 && testBSummary.max_score === 0, 'in-progress-only set item should not count as scored');
 
     const updated = await req('PUT', '/api/test-sets/' + encodeURIComponent(createdSet.body.id), {
       name: 'Updated Set ' + unique,

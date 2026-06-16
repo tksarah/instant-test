@@ -359,24 +359,27 @@
     const [setClassIds, setSetClassIds] = React.useState([]);
     const [setTestIds, setSetTestIds] = React.useState([]);
     const [setTestSourceTab, setSetTestSourceTab] = React.useState('public');
+    const [testSetArchiveView, setTestSetArchiveView] = React.useState('active');
     const [textForAI, setTextForAI] = React.useState('');
     const [message, setMessage] = React.useState('');
     const [questions, setQuestions] = React.useState([]);
     const [modalOpen, setModalOpen] = React.useState(false);
     const [modalQuestions, setModalQuestions] = React.useState([]);
     const [mode, setMode] = React.useState(sharedStudentAccess ? 'student' : 'teacher');
+    const [teacherWorkspaceSection, setTeacherWorkspaceSection] = React.useState('classes');
+    const [teacherDistributionMode, setTeacherDistributionMode] = React.useState('single');
     const [teacherTestQuery, setTeacherTestQuery] = React.useState('');
     const [teacherFilterClassId, setTeacherFilterClassId] = React.useState('');
     const [teacherArchiveView, setTeacherArchiveView] = React.useState('active');
     const [teacherActiveClassViewId, setTeacherActiveClassViewId] = React.useState('');
     const [teacherArchivedClassViewId, setTeacherArchivedClassViewId] = React.useState('');
     const [teacherTestViewMode, setTeacherTestViewMode] = React.useState('compact');
-    const [expandedTeacherTests, setExpandedTeacherTests] = React.useState({});
     const [editingTestId, setEditingTestId] = React.useState(null);
     const [editingTestName, setEditingTestName] = React.useState('');
     const [editingTestBusy, setEditingTestBusy] = React.useState(false);
     const [teacherNoteDrafts, setTeacherNoteDrafts] = React.useState({});
     const [teacherNoteSavingId, setTeacherNoteSavingId] = React.useState(null);
+    const [teacherNoteModal, setTeacherNoteModal] = React.useState({ open: false, test: null });
     const [assignmentModal, setAssignmentModal] = React.useState({
       open: false,
       test: null,
@@ -438,6 +441,7 @@
     const [answersByQuestionId, setAnswersByQuestionId] = React.useState({});
     const [examReviewVisible, setExamReviewVisible] = React.useState(false);
     const [reviewingQuestionIndex, setReviewingQuestionIndex] = React.useState(null);
+    const [studentAnswerNotice, setStudentAnswerNotice] = React.useState(null);
     // Reports (integrated) state
     const [reports, setReports] = React.useState([]);
     const [reportsLoading, setReportsLoading] = React.useState(false);
@@ -461,6 +465,7 @@
     const [studentBusyLabel, setStudentBusyLabel] = React.useState('');
     const reportSummaryCacheRef = React.useRef({});
     const examAutoSubmitRef = React.useRef(false);
+    const answerSubmitInFlightRef = React.useRef(false);
     // selectedUserId / selectedUserSummary removed (side-card feature disabled)
     React.useEffect(()=>{
       setInitialDataLoading(true);
@@ -689,9 +694,9 @@
         window.alert('そのテスト名は既に使われています。別の名前を指定してください');
         return;
       }
-      const selectedClassIds = selectedClass ? [selectedClass.id] : [];
+      const selectedClassIds = [];
       const timeLimitMinutes = normalizeTimeLimitMinutes(testTimeLimitMinutes, testAnswerMode);
-      fetch('/api/tests',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({class_ids:selectedClassIds, class_id:selectedClass?selectedClass.id:null, name:testName, public: testPublic, randomize: testRandomize, answer_mode: testAnswerMode, time_limit_minutes: timeLimitMinutes, teacher_note: ''})}).then(r=>r.json()).then(n=>{ setTests(prev=>prev.concat(Object.assign({id:n.id, name:testName, class_id:selectedClass?selectedClass.id:null, class_ids:selectedClassIds, assigned_classes:selectedClass ? [{ id: selectedClass.id, name: selectedClass.name }] : [], public: testPublic?1:0, randomize: testRandomize?1:0, answer_mode: n && n.answer_mode ? n.answer_mode : testAnswerMode, time_limit_minutes: n && typeof n.time_limit_minutes !== 'undefined' ? n.time_limit_minutes : timeLimitMinutes, archived: 0, teacher_note: ''}, n || {}))); setTestName(''); setTestPublic(false); setTestRandomize(false); setTestAnswerMode('deferred_summary'); setTestTimeLimitMinutes(''); });
+      fetch('/api/tests',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({class_ids:selectedClassIds, class_id:null, name:testName, public: testPublic, randomize: testRandomize, answer_mode: testAnswerMode, time_limit_minutes: timeLimitMinutes, teacher_note: ''})}).then(r=>r.json()).then(n=>{ setTests(prev=>prev.concat(Object.assign({id:n.id, name:testName, class_id:null, class_ids:selectedClassIds, assigned_classes:[], public: testPublic?1:0, randomize: testRandomize?1:0, answer_mode: n && n.answer_mode ? n.answer_mode : testAnswerMode, time_limit_minutes: n && typeof n.time_limit_minutes !== 'undefined' ? n.time_limit_minutes : timeLimitMinutes, archived: 0, teacher_note: ''}, n || {}))); setTestName(''); setTestPublic(false); setTestRandomize(false); setTestAnswerMode('deferred_summary'); setTestTimeLimitMinutes(''); setTeacherWorkspaceSection('distribute'); setTeacherDistributionMode('single'); });
     }
     function toggleSetClassId(classId){
       const id = String(classId);
@@ -756,13 +761,16 @@
       }).catch(function(){ setMessage('まとめ配布の公開設定を更新できませんでした'); });
     }
     function archiveTestSet(testSet){
+      const nextArchived = testSet.archived ? 0 : 1;
       fetch('/api/test-sets/' + encodeURIComponent(testSet.id), {
         method: 'PUT',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ archived: testSet.archived ? 0 : 1, public: testSet.archived ? testSet.public : 0 })
+        body: JSON.stringify({ archived: nextArchived, public: 0 })
       }).then(function(r){ return r.json(); }).then(function(updated){
         if(updated && updated.error){ setMessage(updated.error); return; }
         setTestSets(function(prev){ return prev.map(function(item){ return item.id === updated.id ? updated : item; }); });
+        setTestSetArchiveView(nextArchived ? 'archived' : 'active');
+        setMessage(nextArchived ? 'まとめ配布をアーカイブしました' : 'まとめ配布を下書きとして復元しました');
       }).catch(function(){ setMessage('まとめ配布を更新できませんでした'); });
     }
     function openTestSetDeleteModal(testSet){
@@ -1017,12 +1025,6 @@
       Promise.all(ops).then(()=>{ fetchQuestions(window.selectedTestId).then(()=>{ setMessage('保存完了'); closeModal(); }); }).catch(()=>setMessage('保存エラー'));
     }
 
-    function toggleTestPublic(test){
-      const newPublic = test.public ? 0 : 1;
-      fetch('/api/tests/'+test.id, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name: test.name, description: test.description || '', public: newPublic, randomize: test.randomize || 0 }) }).then(r=>r.json()).then(updated=>{
-        setTests(prev => prev.map(t => t.id===updated.id ? updated : t));
-      }).catch(()=> setMessage('公開設定更新エラー'));
-    }
     function toggleTestArchived(test){
       const nextArchived = test.archived ? 0 : 1;
       const nextPublic = nextArchived ? 0 : (test.public || 0);
@@ -1278,18 +1280,6 @@
       ev.dataTransfer.effectAllowed = 'move';
     }
 
-    function toggleTeacherTestExpanded(testId){
-      setExpandedTeacherTests(function(prev){
-        const next = Object.assign({}, prev);
-        if(next[testId]){
-          delete next[testId];
-        } else {
-          next[testId] = true;
-        }
-        return next;
-      });
-    }
-
     function getTeacherNoteDraft(test){
       if(Object.prototype.hasOwnProperty.call(teacherNoteDrafts, test.id)){
         return teacherNoteDrafts[test.id];
@@ -1314,15 +1304,44 @@
     }
 
     function saveTeacherNote(test){
-      if(teacherNoteSavingId) return;
+      if(teacherNoteSavingId) return Promise.resolve(null);
       const nextNote = getTeacherNoteDraft(test);
       setTeacherNoteSavingId(test.id);
-      updateTestRecord(test, { teacher_note: nextNote }, 'メモの保存に失敗しました', 'メモを保存しました').then(function(updated){
+      return updateTestRecord(test, { teacher_note: nextNote }, 'メモの保存に失敗しました', 'メモを保存しました').then(function(updated){
         setTeacherNoteSavingId(null);
         if(updated){
           cancelTeacherNoteEdit(updated);
         }
+        return updated;
       });
+    }
+
+    function openTeacherNoteModal(test){
+      if(!test) return;
+      setTeacherNoteDraft(test.id, test.teacher_note || '');
+      setTeacherNoteModal({ open: true, test: test });
+    }
+
+    function closeTeacherNoteModal(){
+      if(teacherNoteSavingId) return;
+      if(teacherNoteModal.test){
+        cancelTeacherNoteEdit(teacherNoteModal.test);
+      }
+      setTeacherNoteModal({ open: false, test: null });
+    }
+
+    function saveTeacherNoteFromModal(){
+      if(!teacherNoteModal.test) return;
+      saveTeacherNote(teacherNoteModal.test).then(function(updated){
+        if(updated){
+          setTeacherNoteModal({ open: false, test: null });
+        }
+      });
+    }
+
+    function getQuestionManagementHref(test){
+      const classId = getTestClassIds(test)[0] || test.class_id || '';
+      return '/create_test.html?class_id=' + encodeURIComponent(classId) + '&name=' + encodeURIComponent(test.name || '') + '&test_id=' + encodeURIComponent(test.id);
     }
 
     // build list of test item elements from data (keep data->UI mapping pure)
@@ -1337,8 +1356,8 @@
     const unassignedClassViewKey = '__unassigned';
     const activeScopeTests = teacherArchiveView === 'archived' ? archivedTests : activeTests;
     const activeScopeClassViewId = teacherArchiveView === 'archived' ? teacherArchivedClassViewId : teacherActiveClassViewId;
-    const isClassOverview = !activeScopeClassViewId;
-    const isClassDetail = !!activeScopeClassViewId;
+    const isClassOverview = false;
+    const isClassDetail = false;
     const isArchivedClassOverview = teacherArchiveView === 'archived' && !teacherArchivedClassViewId;
     const isArchivedClassDetail = teacherArchiveView === 'archived' && !!teacherArchivedClassViewId;
     const isActiveClassOverview = teacherArchiveView === 'active' && !teacherActiveClassViewId;
@@ -1346,9 +1365,9 @@
     const displayedTests = tests.filter(function(t){
       const matchesArchive = teacherArchiveView === 'archived' ? !!t.archived : !t.archived;
       const matchesQuery = !normalizedTeacherQuery || (t.name || '').toLowerCase().includes(normalizedTeacherQuery);
-      const matchesClass = !activeScopeClassViewId
-        ? false
-        : (activeScopeClassViewId === unassignedClassViewKey ? getTestClassIds(t).length === 0 : isTestAssignedToClass(t, activeScopeClassViewId));
+      const matchesClass = !teacherFilterClassId
+        ? true
+        : (teacherFilterClassId === unassignedClassViewKey ? getTestClassIds(t).length === 0 : isTestAssignedToClass(t, teacherFilterClassId));
       return matchesArchive && matchesQuery && matchesClass;
     });
     const scopeClassCards = classes.map(function(c){
@@ -1369,13 +1388,17 @@
     const selectedArchivedClassCard = selectedScopeClassCard;
 
     function renderTeacherSetCard(){
+      const activeTestSets = testSets.filter(function(s){ return !s.archived; });
+      const archivedTestSets = testSets.filter(function(s){ return !!s.archived; });
+      const isArchivedSetView = testSetArchiveView === 'archived';
+      const visibleTestSets = isArchivedSetView ? archivedTestSets : activeTestSets;
       return e('section', { id: 'teacher-set-card', className: 'task-section-card teacher-set-card' },
         e('div', { className: 'task-section-heading' },
           e('div', { 'data-title-icon': 'assign' },
             e('h2', null, 'まとめ配布を作成'),
             e('p', { className: 'section-note' }, '複数のテストを1つの学習メニューとして配布します。')
           ),
-          e('span', { className: 'task-chip task-chip-muted' }, testSets.filter(function(s){ return !s.archived; }).length + '件')
+          e('span', { className: 'task-chip task-chip-muted' }, '運用中 ' + activeTestSets.length + '件 / アーカイブ ' + archivedTestSets.length + '件')
         ),
         e('div', { className: 'task-form-stack teacher-set-form' },
           e('input', { value: setName, onChange: function(ev){ setSetName(ev.target.value); }, placeholder: '例: 1学期まとめ', 'aria-label': 'まとめ配布名' }),
@@ -1448,20 +1471,40 @@
           ),
           e('button', { onClick: createTestSet, className: 'btn btn-primary', type: 'button' }, 'まとめ配布を作成')
         ),
-        testSets.length ? e('div', { className: 'teacher-set-list' }, testSets.filter(function(s){ return !s.archived; }).map(function(s){
-          return e('article', { key: s.id, className: 'teacher-set-row' },
+        e('div', { className: 'teacher-set-list-heading' },
+          e('div', null,
+            e('strong', null, isArchivedSetView ? 'アーカイブ済みまとめ配布' : '運用中のまとめ配布'),
+            e('p', { className: 'section-note' }, isArchivedSetView ? '復元すると下書きとして運用中一覧へ戻ります。' : '公開中のまとめ配布は共有QRで案内できます。')
+          ),
+          e('div', { className: 'teacher-set-archive-switch', role: 'group', 'aria-label': 'まとめ配布一覧の表示切替' },
+            e('button', {
+              type: 'button',
+              className: testSetArchiveView === 'active' ? 'mode-tab is-active' : 'mode-tab',
+              onClick: function(){ setTestSetArchiveView('active'); },
+              'aria-pressed': testSetArchiveView === 'active'
+            }, '運用中'),
+            e('button', {
+              type: 'button',
+              className: testSetArchiveView === 'archived' ? 'mode-tab is-active' : 'mode-tab',
+              onClick: function(){ setTestSetArchiveView('archived'); },
+              'aria-pressed': testSetArchiveView === 'archived'
+            }, 'アーカイブ済み')
+          )
+        ),
+        visibleTestSets.length ? e('div', { className: 'teacher-set-list' }, visibleTestSets.map(function(s){
+          return e('article', { key: s.id, className: cx('teacher-set-row', s.archived && 'is-archived') },
             e('div', null,
               e('strong', null, s.name),
-              e('p', { className: 'section-note' }, getSetAssignmentLabel(s, classes) + ' / ' + ((s.items || []).length) + 'テスト')
+              e('p', { className: 'section-note' }, getSetAssignmentLabel(s, classes) + ' / ' + ((s.items || []).length) + 'テスト' + (s.archived ? ' / アーカイブ済み' : ''))
             ),
             e('div', { className: 'teacher-set-row__actions' },
-              e('button', { className: 'btn btn-small btn-ghost', type: 'button', onClick: function(){ toggleTestSetPublic(s); } }, s.public ? '下書きへ' : '公開'),
-              e('button', { className: 'btn btn-small btn-secondary', type: 'button', onClick: function(){ openSetQrShareModal(s); }, disabled: !s.public || !getSetClassIds(s).length }, '共有QR'),
-              e('button', { className: 'btn btn-small btn-ghost', type: 'button', onClick: function(){ archiveTestSet(s); } }, 'アーカイブ'),
+              s.archived ? null : e('button', { className: 'btn btn-small btn-ghost', type: 'button', onClick: function(){ toggleTestSetPublic(s); } }, s.public ? '下書きへ' : '公開'),
+              s.archived ? null : e('button', { className: 'btn btn-small btn-secondary', type: 'button', onClick: function(){ openSetQrShareModal(s); }, disabled: !s.public || !getSetClassIds(s).length }, '共有QR'),
+              e('button', { className: 'btn btn-small btn-ghost', type: 'button', onClick: function(){ archiveTestSet(s); } }, s.archived ? '復元' : 'アーカイブ'),
               e('button', { className: 'btn btn-small btn-ghost', type: 'button', onClick: function(){ deleteTestSet(s); } }, '削除')
             )
           );
-        })) : e('div', { className: 'task-empty' }, 'まとめ配布はまだありません')
+        })) : e('div', { className: 'task-empty teacher-set-empty' }, isArchivedSetView ? 'アーカイブ済みのまとめ配布はありません' : '運用中のまとめ配布はまだありません')
       );
     }
     const publicTestsCount = tests.filter(function(t){ return !!t.public; }).length;
@@ -1473,30 +1516,195 @@
     const attentionTestsCount = activeTests.filter(function(t){
       return !t.public || getTestClassIds(t).length === 0 || Number(testQuestionCounts[t.id] || 0) === 0;
     }).length;
+    const activeTestSetsCount = testSets.filter(function(s){ return !s.archived; }).length;
+    const unassignedTestsCount = activeTests.filter(function(t){ return getTestClassIds(t).length === 0; }).length;
+    const testsNeedingQuestionsCount = activeTests.filter(function(t){ return Number(testQuestionCounts[t.id] || 0) === 0; }).length;
+    const questionBuilderTests = activeTests.filter(function(t){
+      return !normalizedTeacherQuery || (t.name || '').toLowerCase().includes(normalizedTeacherQuery);
+    });
     const teacherFlowSteps = [
       {
-        key: 'classroom',
+        key: 'classes',
         step: '1',
-        title: 'クラス管理',
-        summary: 'クラスを作成'
+        title: 'クラス',
+        summary: classes.length + 'クラス'
       },
       {
-        key: 'compose',
+        key: 'create',
         step: '2',
-        title: 'テストを作成',
-        summary: '配布するテストを作成'
+        title: 'テスト作成',
+        summary: activeTestsCount + '件'
       },
       {
-        key: 'manage',
+        key: 'distribute',
         step: '3',
-        title: 'テストの管理',
-        items: [
-          { key: 'edit', step: '3-1', text: '問題の作成・編集' },
-          { key: 'public', step: '3-2', text: '公開設定' },
-          { key: 'share', step: '3-3', text: '共有 QR から生徒へ配布' }
-        ]
+        title: '配布',
+        summary: '単体・まとめ'
+      },
+      {
+        key: 'questions',
+        step: '4',
+        title: '問題作成',
+        summary: testsNeedingQuestionsCount + '件要作成'
+      },
+      {
+        key: 'settings',
+        step: '5',
+        title: 'テスト設定',
+        summary: attentionTestsCount + '件要確認'
       }
     ];
+
+    function renderTeacherWorkspaceSidebar(){
+      return e('aside', { className: 'teacher-workspace-sidebar', 'aria-label': '教師メニューの作業ステップ' },
+        e('div', { className: 'teacher-workspace-sidebar__header' },
+          e('span', { className: 'eyebrow' }, '教員メニュー'),
+          e('strong', null, '作業ステップ')
+        ),
+        e('nav', { className: 'teacher-workspace-nav' }, teacherFlowSteps.map(function(step){
+          const active = teacherWorkspaceSection === step.key;
+          return e('button', {
+            key: step.key,
+            className: active ? 'teacher-workspace-nav__item is-active' : 'teacher-workspace-nav__item',
+            type: 'button',
+            onClick: function(){ setTeacherWorkspaceSection(step.key); },
+            'aria-current': active ? 'step' : null
+          },
+            e('span', { className: 'teacher-workspace-nav__index' }, step.step),
+            e('span', { className: 'teacher-workspace-nav__body' },
+              e('strong', null, step.title),
+              e('span', null, step.summary)
+            )
+          );
+        })),
+        e('div', { className: 'teacher-workspace-sidebar__note' },
+          teacherWorkspaceSection === 'distribute'
+            ? (teacherDistributionMode === 'set' ? 'まとめ配布は複数テストを1つの学習メニューとして配布します。' : '単体配布は1つのテストを複数クラスへ割り当てます。')
+            : '左から順に進めると、クラス作成から公開・共有まで整理できます。'
+        )
+      );
+    }
+
+    function renderTeacherStepActions(nextKey, label){
+      if(!nextKey) return null;
+      return e('div', { className: 'teacher-step-actions' },
+        e('button', {
+          className: 'btn btn-secondary',
+          type: 'button',
+          onClick: function(){ setTeacherWorkspaceSection(nextKey); }
+        }, label)
+      );
+    }
+
+    function renderTeacherDistributionSwitch(){
+      return e('section', { className: 'task-section-card teacher-distribution-card' },
+        e('div', { className: 'task-section-heading' },
+          e('div', { 'data-title-icon': 'assign' },
+            e('h2', null, 'テストの配布'),
+            e('p', { className: 'section-note' }, '単体テストの配布と、複数テストをまとめた配布を切り替えて設定します。')
+          ),
+          e('span', { className: 'task-chip task-chip-muted' }, '未割当: ' + unassignedTestsCount + '件 / まとめ: ' + activeTestSetsCount + '件')
+        ),
+        e('div', { className: 'teacher-distribution-tabs', role: 'tablist', 'aria-label': '配布方法' },
+          e('button', {
+            className: teacherDistributionMode === 'single' ? 'mode-tab is-active' : 'mode-tab',
+            type: 'button',
+            role: 'tab',
+            'aria-selected': teacherDistributionMode === 'single',
+            onClick: function(){ setTeacherDistributionMode('single'); }
+          }, '単体配布'),
+          e('button', {
+            className: teacherDistributionMode === 'set' ? 'mode-tab is-active' : 'mode-tab',
+            type: 'button',
+            role: 'tab',
+            'aria-selected': teacherDistributionMode === 'set',
+            onClick: function(){ setTeacherDistributionMode('set'); }
+          }, 'まとめ配布')
+        )
+      );
+    }
+
+    function renderTeacherSingleDistributionCard(){
+      return e('section', { id: 'teacher-single-distribution-card', className: 'task-section-card teacher-single-distribution-card' },
+        e('div', { className: 'task-section-heading' },
+          e('div', { 'data-title-icon': 'assign' },
+            e('h2', null, '単体テストを配布'),
+            e('p', { className: 'section-note' }, '作成済みテストを1件ずつ、受験できるクラスへ割り当てます。')
+          ),
+          e('span', { className: 'task-chip task-chip-muted' }, activeTestsCount + '件')
+        ),
+        activeTests.length
+          ? e('div', { className: 'teacher-distribution-list' }, activeTests.map(function(t){
+              const questionCount = Number(testQuestionCounts[t.id] || 0);
+              const assignedClassIds = getTestClassIds(t);
+              const assignedClasses = getAssignedClasses(t, classes);
+              const canShareByAssignments = questionCount > 0 && !!t.public && assignedClassIds.length > 0 && !t.archived;
+              const managementState = getTeacherTestManagementState(t, questionCount);
+              return e('article', { key: t.id, className: cx('teacher-distribution-row', assignedClassIds.length === 0 && 'is-unassigned') },
+                e('div', { className: 'teacher-distribution-row__main' },
+                  e('strong', { className: 'teacher-distribution-row__title' }, t.name),
+                  e('span', { className: 'teacher-test-state is-' + managementState.tone }, managementState.label),
+                  e('p', { className: 'section-note' }, questionCount + '問 / ' + getAssignmentLabel(t, classes) + ' / ' + (!!t.public ? '公開中' : '下書き'))
+                ),
+                e('div', { className: 'teacher-assignment-chips' },
+                  assignedClasses.length
+                    ? assignedClasses.map(function(c){ return e('span', { key: c.id, className: 'teacher-assignment-chip' }, c.name); })
+                    : e('span', { className: 'teacher-assignment-chip is-empty' }, '未割当')
+                ),
+                e('div', { className: 'teacher-distribution-row__actions' },
+                  e('button', { className: 'btn btn-small btn-primary', type: 'button', onClick: function(){ openAssignmentModal(t); } }, '配布先設定'),
+                  e('button', { className: 'btn btn-small btn-secondary', type: 'button', onClick: function(){ openClassQrShareModal(t); }, disabled: !canShareByAssignments }, '共有QR')
+                )
+              );
+            }))
+          : e('div', { className: 'task-empty' }, '配布できるテストがまだありません。先にテストを作成してください。'),
+        renderTeacherStepActions('questions', '問題作成へ進む')
+      );
+    }
+
+    function renderTeacherQuestionBuilderCard(){
+      return e('section', { id: 'teacher-question-card', className: 'task-section-card teacher-question-card' },
+        e('div', { className: 'task-section-heading' },
+          e('div', { 'data-title-icon': 'compose' },
+            e('h2', null, 'テストに問題を作成'),
+            e('p', { className: 'section-note' }, '各テストの問題管理画面を開いて、問題を追加・編集します。')
+          ),
+          e('span', { className: 'task-chip task-chip-muted' }, testsNeedingQuestionsCount + '件が問題未作成')
+        ),
+        e('div', { className: 'task-filter-bar teacher-question-filter' },
+          e('input', {
+            value: teacherTestQuery,
+            onChange: function(ev){ setTeacherTestQuery(ev.target.value); },
+            placeholder: 'テスト名で検索',
+            'aria-label': 'テスト名で検索'
+          }),
+          e('button', { className: 'btn btn-ghost', type: 'button', onClick: function(){ setTeacherTestQuery(''); } }, '条件をクリア')
+        ),
+        questionBuilderTests.length
+          ? e('div', { className: 'teacher-question-list' }, questionBuilderTests.map(function(t){
+              const questionCount = Number(testQuestionCounts[t.id] || 0);
+              return e('article', { key: t.id, className: cx('teacher-question-row', questionCount === 0 && 'needs-questions') },
+                e('div', { className: 'teacher-question-row__main' },
+                  e('strong', null, t.name),
+                  e('p', { className: 'section-note' }, getAssignmentLabel(t, classes) + ' / ' + (!!t.public ? '公開中' : '下書き'))
+                ),
+                e('div', { className: cx('teacher-test-meta', questionCount === 0 && 'is-warning') },
+                  e('span', { className: 'teacher-test-meta__label' }, '問題数'),
+                  e('strong', { className: 'teacher-test-meta__value' }, questionCount + '問')
+                ),
+                e('a', { href: getQuestionManagementHref(t), className: 'btn btn-small btn-primary' }, questionCount ? '問題を編集' : '問題を作成')
+              );
+            }))
+          : e('div', { className: 'task-empty' }, teacherTestQuery ? '条件に一致するテストがありません' : '問題を作成するテストがまだありません。'),
+        renderTeacherStepActions('settings', 'テスト設定へ進む')
+      );
+    }
+
+    const teacherNoteModalTest = teacherNoteModal.open ? teacherNoteModal.test : null;
+    const teacherNoteModalDraft = teacherNoteModalTest ? getTeacherNoteDraft(teacherNoteModalTest) : '';
+    const teacherNoteModalOriginal = teacherNoteModalTest ? (teacherNoteModalTest.teacher_note || '') : '';
+    const teacherNoteModalDirty = !!teacherNoteModalTest && teacherNoteModalDraft !== teacherNoteModalOriginal;
+    const teacherNoteModalSaving = !!teacherNoteModalTest && teacherNoteSavingId === teacherNoteModalTest.id;
 
     const teacherNode = e('section', { className: 'task-page teacher-dashboard-page' },
       e('div', { className: 'task-page-hero compact teacher-page-hero teacher-operations-header' },
@@ -1506,8 +1714,8 @@
           e('p', { className: 'lead' }, '準備フローを参考に、テストの準備・配布を行います。')
         ),
         e('div', { className: 'teacher-operations-header__actions' },
-          e('a', { href: '#teacher-tests-card', className: 'btn btn-primary' }, 'テスト運用へ'),
-          e('a', { href: '#teacher-create-card', className: 'btn btn-ghost' }, '新規作成')
+          e('button', { className: 'btn btn-primary', type: 'button', onClick: function(){ setTeacherWorkspaceSection('distribute'); } }, '配布へ'),
+          e('button', { className: 'btn btn-ghost', type: 'button', onClick: function(){ setTeacherWorkspaceSection('create'); } }, 'テスト作成')
         ),
         e('div', { className: 'teacher-page-flow' },
           e('div', { className: 'teacher-page-flow__header' },
@@ -1568,8 +1776,9 @@
       ]),
       initialDataLoading ? e('div', { className: 'teacher-status-strip', role: 'status' }, 'クラスとテストの一覧を読み込んでいます。') : null,
       e('div', { className: 'teacher-workspace-grid' },
+        renderTeacherWorkspaceSidebar(),
         e('section', { className: 'teacher-workspace-main' },
-          e('section', { id: 'teacher-class-card', className: 'task-section-card teacher-class-card' },
+          teacherWorkspaceSection === 'classes' ? e('section', { id: 'teacher-class-card', className: 'task-section-card teacher-class-card' },
             e('div', { className: 'task-section-heading' },
               e('div', { 'data-title-icon': 'classroom' },
                 e('h2', null, 'クラス管理'),
@@ -1583,14 +1792,15 @@
                 e('button', { onClick: createClass, className: 'btn btn-primary', type: 'button' }, '追加')
               )
             ),
-            classItems.length ? e('ul', { className: 'task-list' }, classItems) : e('div', { className: 'task-empty' }, 'クラスがまだありません')
-          ),
-          e('section', { id: 'teacher-tests-card', className: 'task-section-card teacher-tests-card' },
+            classItems.length ? e('ul', { className: 'task-list' }, classItems) : e('div', { className: 'task-empty' }, 'クラスがまだありません'),
+            renderTeacherStepActions('create', 'テスト作成へ進む')
+          ) : null,
+          teacherWorkspaceSection === 'settings' ? e('section', { id: 'teacher-tests-card', className: 'task-section-card teacher-tests-card' },
             e('div', { className: 'task-section-heading' },
               e('div', { 'data-title-icon': 'list' },
-                e('h2', null, 'テストの管理')
+                e('h2', null, 'テスト設定')
               ),
-              e('span', { className: 'task-chip task-chip-muted' }, isClassOverview ? (teacherArchiveView === 'archived' ? 'クラスを選択してアーカイブ済みテストを確認' : 'クラスを選択して運用中テストを確認') : '共有 QR は1問以上作成・公開・クラス割当後に有効')
+              e('span', { className: 'task-chip task-chip-muted' }, '公開・出題モード・メモ・QRをまとめて管理')
             ),
             isClassOverview ? null : e('div', { className: 'task-filter-bar' },
               e('input', {
@@ -1614,7 +1824,8 @@
                     onChange: function(ev){ setTeacherFilterClassId(ev.target.value); },
                     'aria-label': 'クラスで絞り込み'
                   }, [
-                    e('option', { key: '__all_filter', value: '' }, 'すべてのクラス')
+                    e('option', { key: '__all_filter', value: '' }, 'すべての配布先'),
+                    e('option', { key: unassignedClassViewKey, value: unassignedClassViewKey }, '未割当')
                   ].concat(classes.map(function(c){
                     return e('option', { key: c.id, value: c.id }, c.name);
                   }))),
@@ -1694,20 +1905,12 @@
               );
             })) : displayedTests.length ? e('div', { className: 'teacher-test-list' }, displayedTests.map(function(t){
               const questionCount = testQuestionCounts[t.id] || 0;
-              const classNameForTest = (classes.find(function(c){ return c.id === t.class_id; }) || {}).name || '未割当';
-              const canShareTest = Number(questionCount) > 0 && !!t.public && !!t.class_id && !t.archived;
               const assignedClassIds = getTestClassIds(t);
-              const assignedClasses = getAssignedClasses(t, classes);
               const displayClassNameForTest = getAssignmentLabel(t, classes);
               const canShareByAssignments = Number(questionCount) > 0 && !!t.public && assignedClassIds.length > 0 && !t.archived;
               const managementState = getTeacherTestManagementState(t, questionCount);
-              const isDetailedCard = !!expandedTeacherTests[t.id];
               const isRenamingTest = editingTestId === t.id;
               const teacherNote = (t.teacher_note || '').trim();
-              const teacherNoteDraft = getTeacherNoteDraft(t);
-              const hasTeacherNoteDraft = Object.prototype.hasOwnProperty.call(teacherNoteDrafts, t.id);
-              const isTeacherNoteDirty = hasTeacherNoteDraft && teacherNoteDraft !== (t.teacher_note || '');
-              const isTeacherNoteSaving = teacherNoteSavingId === t.id;
               return e('article', {
                 key: t.id,
                 draggable: false,
@@ -1716,7 +1919,6 @@
                   'teacher-test-row',
                   'teacher-test-card',
                   'teacher-test-card--' + managementState.tone,
-                  isDetailedCard && 'is-detailed',
                   questionCount === 0 && 'needs-questions',
                   assignedClassIds.length === 0 && 'is-unassigned',
                   canShareByAssignments && 'is-share-ready',
@@ -1768,71 +1970,43 @@
                       e('p', { className: 'teacher-test-card__helper' }, managementState.detail)
                     )
                   ),
-                  e('div', { className: 'task-badges teacher-test-card__badges' },
+                  (teacherNote || t.archived) ? e('div', { className: 'task-badges teacher-test-card__badges' },
                     teacherNote ? e('span', { className: 'badge badge-note' }, 'メモあり') : null,
-                    t.archived ? e('span', { className: 'badge badge-muted' }, 'アーカイブ済み') : null,
-                    e('span', { className: !!t.public ? 'badge badge-success' : 'badge' }, !!t.public ? '公開中' : '下書き'),
-                    e('span', { className: !!t.randomize ? 'badge badge-accent' : 'badge badge-muted' }, !!t.randomize ? 'ランダム' : '固定順'),
-                    e('span', { className: isImmediateFeedbackMode(t) ? 'badge badge-accent' : 'badge badge-muted' }, getAnswerModeLabel(t))
-                  )
+                    t.archived ? e('span', { className: 'badge badge-muted' }, 'アーカイブ済み') : null
+                  ) : null
                 ),
                 e('div', { className: 'teacher-test-row__meta' },
                   e('div', { className: 'teacher-test-card__summary-grid' },
-                  e('div', { className: 'teacher-test-meta' },
-                    e('span', { className: 'teacher-test-meta__label' }, 'クラス'),
-                    e('strong', { className: 'teacher-test-meta__value' }, displayClassNameForTest)
-                  ),
-                  e('div', { className: cx('teacher-test-meta', questionCount === 0 && 'is-warning') },
-                    e('span', { className: 'teacher-test-meta__label' }, '問題数'),
-                    e('strong', { className: 'teacher-test-meta__value' }, questionCount + '問')
-                  )
-                  )
-                ),
-                e('div', { className: 'teacher-test-row__actions teacher-test-card__primary-actions' },
-                  e('a', { href: '/create_test.html?class_id=' + encodeURIComponent(t.class_id || '') + '&name=' + encodeURIComponent(t.name || '') + '&test_id=' + encodeURIComponent(t.id), className: 'btn btn-small btn-primary teacher-test-action teacher-test-action--primary' }, '問題管理'),
-                  e('button', { onClick: function(){ openAssignmentModal(t); }, className: 'btn btn-small btn-ghost teacher-test-action teacher-test-action--secondary', type: 'button' }, '配布先'),
-                  t.archived ? null : e('button', { onClick: function(){ openClassQrShareModal(t); }, className: 'btn btn-small btn-secondary teacher-test-action teacher-test-action--secondary', type: 'button', disabled: !canShareByAssignments }, '共有 QR'),
-                  t.archived ? e('button', { onClick: function(){ toggleTestArchived(t); }, className: 'btn btn-small btn-ghost teacher-test-action teacher-test-action--secondary', type: 'button' }, '復元') : null,
-                  e('button', {
-                    onClick: function(){ toggleTeacherTestExpanded(t.id); },
-                    className: cx('btn btn-small btn-ghost teacher-test-action teacher-test-action--secondary teacher-test-action--expand', isDetailedCard && 'is-active'),
-                    type: 'button',
-                    'aria-expanded': isDetailedCard,
-                    'aria-pressed': isDetailedCard
-                  }, isDetailedCard ? '詳細を隠す' : '詳細')
-                ),
-                isDetailedCard ? e('div', { className: 'teacher-test-card__details' },
-                  e('div', { className: 'teacher-assignment-chips' },
-                    assignedClasses.length
-                      ? assignedClasses.map(function(c){ return e('span', { key: c.id, className: 'teacher-assignment-chip' }, c.name); })
-                      : e('span', { className: 'teacher-assignment-chip is-empty' }, '未割当')
-                  ),
-                  e('div', { className: 'teacher-test-note-editor' },
-                    e('div', { className: 'teacher-test-note-editor__header' },
-                      e('label', { htmlFor: 'teacher-note-' + t.id }, '教師メモ'),
-                      e('span', { className: 'teacher-test-note-editor__count' }, String(teacherNoteDraft.length) + '/1000')
+                    e('div', { className: 'teacher-test-meta' },
+                      e('span', { className: 'teacher-test-meta__label' }, 'クラス'),
+                      e('strong', { className: 'teacher-test-meta__value' }, displayClassNameForTest)
                     ),
-                    e('textarea', {
-                      id: 'teacher-note-' + t.id,
-                      className: 'teacher-test-note-editor__textarea',
-                      value: teacherNoteDraft,
-                      maxLength: 1000,
-                      rows: 3,
-                      placeholder: '準備物、配布タイミング、注意点などを記録',
-                      disabled: isTeacherNoteSaving,
-                      onChange: function(ev){ setTeacherNoteDraft(t.id, ev.target.value); }
-                    }),
-                    e('div', { className: 'teacher-test-note-editor__actions' },
-                      isTeacherNoteDirty ? e('span', { className: 'teacher-test-note-editor__status' }, '未保存の変更があります') : e('span', { className: 'teacher-test-note-editor__status' }, teacherNote ? '保存済みメモ' : 'メモは未記入です'),
-                      e('button', { className: 'btn btn-small btn-primary', type: 'button', onClick: function(){ saveTeacherNote(t); }, disabled: isTeacherNoteSaving || !isTeacherNoteDirty }, isTeacherNoteSaving ? '保存中...' : '保存'),
-                      e('button', { className: 'btn btn-small btn-ghost', type: 'button', onClick: function(){ cancelTeacherNoteEdit(t); }, disabled: isTeacherNoteSaving || !isTeacherNoteDirty }, 'キャンセル')
+                    e('div', { className: cx('teacher-test-meta', questionCount === 0 && 'is-warning') },
+                      e('span', { className: 'teacher-test-meta__label' }, '問題数'),
+                      e('strong', { className: 'teacher-test-meta__value' }, questionCount + '問')
                     )
                   ),
-                  e('div', { className: 'task-card-controls teacher-test-card__controls' },
-                    e('label', { className: 'task-toggle compact' }, e('input', { type: 'checkbox', checked: !!t.public, onChange: function(){ toggleTestPublic(t); }, disabled: !!t.archived }), e('span', null, '公開')),
-                    e('label', { className: 'task-toggle compact' }, e('input', { type: 'checkbox', checked: !!t.randomize, onChange: function(){ updateTestRecord(t, { randomize: t.randomize ? 0 : 1 }, 'ランダム設定更新エラー'); } }), e('span', null, 'ランダム')),
-                    e('label', { className: 'task-toggle compact' },
-                      e('span', null, '出題モード'),
+                  e('div', { className: 'teacher-test-card__settings-strip', 'aria-label': 'テスト設定' },
+                    e('label', { className: 'teacher-setting-control teacher-setting-control--toggle' },
+                      e('input', {
+                        type: 'checkbox',
+                        checked: !!t.public,
+                        onChange: function(){ updateTestRecord(t, { public: t.public ? 0 : 1 }, '公開設定更新エラー'); },
+                        disabled: !!t.archived
+                      }),
+                      e('span', null, '公開')
+                    ),
+                    e('label', { className: 'teacher-setting-control teacher-setting-control--toggle' },
+                      e('input', {
+                        type: 'checkbox',
+                        checked: !!t.randomize,
+                        onChange: function(){ updateTestRecord(t, { randomize: t.randomize ? 0 : 1 }, 'ランダム設定更新エラー'); },
+                        disabled: !!t.archived
+                      }),
+                      e('span', null, 'ランダム')
+                    ),
+                    e('label', { className: 'teacher-setting-control teacher-setting-control--select' },
+                      e('span', null, '出題'),
                       e('select', {
                         value: getAnswerModeValue(t),
                         onChange: function(ev){ updateTestRecord(t, { answer_mode: ev.target.value }, '出題モード更新エラー'); },
@@ -1842,8 +2016,8 @@
                         return e('option', { key: option.value, value: option.value }, option.label);
                       }))
                     ),
-                    e('label', { className: 'task-toggle compact teacher-time-limit-control' },
-                      e('span', null, '制限時間（分）'),
+                    e('label', { className: 'teacher-setting-control teacher-setting-control--time teacher-time-limit-control' },
+                      e('span', null, '制限'),
                       e('input', {
                         type: 'number',
                         min: '1',
@@ -1855,30 +2029,36 @@
                         'aria-label': '制限時間（分）'
                       })
                     )
-                  ),
-                  e('p', { className: 'teacher-inline-note teacher-test-card__detail-note' }, managementState.detail),
-                  e('div', { className: 'task-card-footer teacher-card-footer teacher-test-card__secondary-actions' },
-                    e('button', { onClick: function(){ toggleTestArchived(t); }, className: 'btn btn-small btn-ghost', type: 'button' }, t.archived ? '復元' : 'アーカイブ'),
-                    e('button', { onClick: function(){ deleteTest(t); }, className: 'btn btn-small btn-ghost', type: 'button' }, '削除')
                   )
-                ) : null
+                ),
+                e('div', { className: 'teacher-test-row__actions teacher-test-card__primary-actions' },
+                  e('button', { onClick: function(){ openAssignmentModal(t); }, className: 'btn btn-small btn-ghost teacher-test-action teacher-test-action--secondary', type: 'button' }, '配布先'),
+                  t.archived ? null : e('button', { onClick: function(){ openClassQrShareModal(t); }, className: 'btn btn-small btn-secondary teacher-test-action teacher-test-action--secondary', type: 'button', disabled: !canShareByAssignments }, '共有 QR'),
+                  e('button', { onClick: function(){ toggleTestArchived(t); }, className: 'btn btn-small btn-ghost teacher-test-action teacher-test-action--secondary', type: 'button' }, t.archived ? '復元' : 'アーカイブ'),
+                  e('button', { onClick: function(){ openTeacherNoteModal(t); }, className: 'btn btn-small btn-ghost teacher-test-action teacher-test-action--secondary', type: 'button' }, teacherNote ? 'メモ編集' : 'メモ')
+                ),
+                e('div', { className: 'teacher-test-card__delete-row' },
+                  e('button', { onClick: function(){ deleteTest(t); }, className: 'btn btn-small btn-ghost teacher-test-action teacher-test-action--danger', type: 'button' }, '削除')
+                )
               );
-            })) : e('div', { className: 'task-empty' }, teacherTestQuery ? '条件に一致するテストがありません' : (teacherArchiveView === 'archived' ? 'このクラスのアーカイブ済みテストはありません' : 'このクラスの運用中テストはありません'))
-          ),
-          renderTeacherSetCard()
+            })) : e('div', { className: 'task-empty' }, teacherTestQuery ? '条件に一致するテストがありません' : (teacherArchiveView === 'archived' ? 'アーカイブ済みテストはありません' : '運用中テストはありません'))
+          ) : null,
+          teacherWorkspaceSection === 'distribute' ? renderTeacherDistributionSwitch() : null,
+          teacherWorkspaceSection === 'distribute' && teacherDistributionMode === 'single' ? renderTeacherSingleDistributionCard() : null,
+          teacherWorkspaceSection === 'distribute' && teacherDistributionMode === 'set' ? renderTeacherSetCard() : null,
+          teacherWorkspaceSection === 'questions' ? renderTeacherQuestionBuilderCard() : null
         ),
         e('aside', { className: 'teacher-workspace-side' },
-          e('section', { id: 'teacher-create-card', className: 'task-section-card teacher-create-card' },
+          teacherWorkspaceSection === 'create' ? e('section', { id: 'teacher-create-card', className: 'task-section-card teacher-create-card' },
             e('div', { className: 'task-section-heading' },
               e('div', { 'data-title-icon': 'compose' },
                 e('h2', null, 'テストを作成'),
-                e('p', { className: 'section-note' }, 'クラスを選択して新しいテストを作成します。')
+                e('p', { className: 'section-note' }, 'まずテスト本体を作成します。配布先は次のステップで設定します。')
               ),
-              e('span', { className: 'task-chip' }, selectedClass ? ('対象クラス: ' + selectedClass.name) : '対象クラス: 未選択')
+              e('span', { className: 'task-chip' }, '未割当で作成')
             ),
             null,
             e('div', { className: 'task-form-stack teacher-create-grid' },
-              e('select', { value: selectedClass ? selectedClass.id : '', onChange: function(ev){ setSelectedClass(classes.find(function(x){ return x.id == ev.target.value; }) || null); }, 'aria-label': 'クラス選択' }, [ e('option', { key: '__empty', value: '' }, 'クラスを選択') ].concat(classes.map(function(c){ return e('option', { key: c.id, value: c.id }, c.name); })) ),
               e('input', { value: testName, onChange: function(ev){ setTestName(ev.target.value); }, placeholder: '例: 小テスト 4月1週', 'aria-label': 'テスト名' }),
               e('div', { className: 'task-toggle-row' },
                 e('label', { className: 'task-toggle' }, e('input', { type: 'checkbox', checked: testPublic, onChange: function(ev){ setTestPublic(!!ev.target.checked); } }), e('span', null, '公開する')),
@@ -1913,10 +2093,10 @@
               ),
               e('div', { className: 'task-inline-actions' },
                 e('button', { onClick: createTest, className: 'btn btn-primary', type: 'button' }, '作成'),
-                e('span', { className: 'teacher-inline-note' }, '作成後に問題を編集できます。')
+                e('span', { className: 'teacher-inline-note' }, '作成後、自動で配布ステップへ移動します。')
               )
             )
-          ),
+          ) : null,
           null && e('section', { className: 'task-section-card' },
             e('div', { className: 'task-section-heading' },
               e('div', { 'data-title-icon': 'assign' },
@@ -2005,6 +2185,43 @@
           e('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 } },
             e('button', { className: 'btn btn-ghost', type: 'button', onClick: closeTestSetDeleteModal, disabled: testSetDeleteModal.loading }, 'キャンセル'),
             e('button', { className: 'btn btn-primary', type: 'button', onClick: confirmTestSetDelete, disabled: testSetDeleteModal.loading }, testSetDeleteModal.loading ? '削除中...' : '削除する')
+          )
+        )
+      ) : null,
+
+      teacherNoteModalTest ? e('div', {
+        className: 'modal modal-centered',
+        role: 'dialog',
+        'aria-modal': true,
+        'aria-labelledby': 'teacher-note-modal-title',
+        style: { background: 'rgba(9,16,26,0.56)' },
+        onClick: function(event){ if(event.target === event.currentTarget && !teacherNoteModalSaving) closeTeacherNoteModal(); }
+      },
+        e('div', { className: 'modal-panel teacher-note-modal', onClick: function(event){ event.stopPropagation(); } },
+          e('div', { className: 'teacher-note-modal__header' },
+            e('div', null,
+              e('p', { className: 'eyebrow' }, '教師メモ'),
+              e('h3', { id: 'teacher-note-modal-title' }, (teacherNoteModalTest.name || 'テスト') + ' のメモ')
+            ),
+            e('span', { className: 'teacher-test-note-editor__count' }, String(teacherNoteModalDraft.length) + '/1000')
+          ),
+          e('p', { className: 'task-helper-text teacher-note-modal__description' }, '準備物、配布タイミング、注意点などを記録できます。'),
+          e('textarea', {
+            id: 'teacher-note-modal-textarea',
+            className: 'teacher-test-note-editor__textarea teacher-note-modal__textarea',
+            value: teacherNoteModalDraft,
+            maxLength: 1000,
+            rows: 6,
+            placeholder: '準備物、配布タイミング、注意点などを記録',
+            disabled: teacherNoteModalSaving,
+            onChange: function(ev){ setTeacherNoteDraft(teacherNoteModalTest.id, ev.target.value); }
+          }),
+          e('div', { className: 'teacher-note-modal__actions' },
+            teacherNoteModalDirty
+              ? e('span', { className: 'teacher-test-note-editor__status' }, '未保存の変更があります')
+              : e('span', { className: 'teacher-test-note-editor__status' }, teacherNoteModalOriginal ? '保存済みメモ' : 'メモは未記入です'),
+            e('button', { className: 'btn btn-ghost', type: 'button', onClick: closeTeacherNoteModal, disabled: teacherNoteModalSaving }, 'キャンセル'),
+            e('button', { className: 'btn btn-primary', type: 'button', onClick: saveTeacherNoteFromModal, disabled: teacherNoteModalSaving || !teacherNoteModalDirty }, teacherNoteModalSaving ? '保存中...' : '保存')
           )
         )
       ) : null,
@@ -2100,8 +2317,10 @@
       setCurrentSelection([]);
       setLastResult(null);
       setAnswersByQuestionId({});
+      setStudentAnswerNotice(null);
       setExamReviewVisible(false);
       setReviewingQuestionIndex(null);
+      answerSubmitInFlightRef.current = false;
       // Prefer explicitStudent (passed from caller) otherwise fall back to state `student`.
       const useStudent = explicitStudent && explicitStudent.id ? explicitStudent : student;
       if(!useStudent || !useStudent.id){
@@ -2196,6 +2415,64 @@
       return formatAnswerTexts(texts, '未回答');
     }
 
+    function setStudentAnswerNoticeText(text, tone){
+      setStudentAnswerNotice(text ? { text: text, tone: tone || 'hint' } : null);
+    }
+
+    function clearStudentAnswerNotice(){
+      setStudentAnswerNotice(null);
+    }
+
+    function getAnswerDisabledReason(selection, timeIsUp){
+      if(timeIsUp) return 'time_up';
+      if(!!studentBusyLabel || answerSubmitInFlightRef.current) return 'busy';
+      if(!Array.isArray(selection) || selection.length === 0) return 'no_selection';
+      return '';
+    }
+
+    function getAnswerDisabledReasonText(reason){
+      if(reason === 'no_selection') return '選択肢を選んでください';
+      if(reason === 'busy') return '通信処理中です。少し待ってください';
+      if(reason === 'time_up') return '制限時間が終了しました';
+      return '';
+    }
+
+    function getCurrentAnswerActionState(selection, timeIsUp){
+      const reason = getAnswerDisabledReason(selection, timeIsUp);
+      return {
+        disabled: !!reason,
+        reason: reason,
+        text: getAnswerDisabledReasonText(reason)
+      };
+    }
+
+    function canSubmitCurrentAnswer(selection, timeIsUp){
+      return !getCurrentAnswerActionState(selection, timeIsUp).disabled;
+    }
+
+    function getStudentSubmitErrorMessage(errorBody){
+      const code = errorBody && errorBody.error ? errorBody.error : '';
+      if(errorBody && errorBody.message) return errorBody.message;
+      if(code === 'time_limit_exceeded') return '制限時間が終了しました';
+      if(code === 'session_completed') return 'このテストはすでに提出済みです';
+      if(code === 'question_already_answered') return 'この問題はすでに送信済みです';
+      if(code === 'question_out_of_order') return '回答順がずれました。続きの問題から再開してください';
+      if(code === 'invalid_choice_id') return '選択肢の情報を確認できませんでした。もう一度選択してください';
+      if(code === 'forbidden') return '参加情報を確認できませんでした。もう一度テストを開いてください';
+      return code || '送信エラー。もう一度送信してください';
+    }
+
+    function handleChoiceSelection(q, choiceId, checked){
+      clearStudentAnswerNotice();
+      if(message) setMessage('');
+      selectChoice(q, choiceId, checked);
+    }
+
+    function handleChoiceOptionTap(q, choiceId, selected, disabled){
+      if(disabled) return;
+      handleChoiceSelection(q, choiceId, q && q.type === 'multiple' ? !selected : true);
+    }
+
     function openExamReview(){
       setExamReviewVisible(true);
       setReviewingQuestionIndex(null);
@@ -2215,14 +2492,21 @@
     async function saveReviewedAnswer(){
       const q = currentQuestions[currentIndex];
       if(!q || !currentSessionId || !student || !currentTest) return;
-      if(isExamMode(currentTest) && examRemainingSeconds === 0){
+      const examTimeIsUp = isExamMode(currentTest) && examRemainingSeconds === 0;
+      if(examTimeIsUp){
         if(!examAutoSubmitRef.current){
           examAutoSubmitRef.current = true;
-          finalizeCurrentTest('time_limit');
+          await finalizeCurrentTest('time_limit');
         }
         return;
       }
+      const actionState = getCurrentAnswerActionState(currentSelection, examTimeIsUp);
+      if(!canSubmitCurrentAnswer(currentSelection, examTimeIsUp)){
+        setStudentAnswerNoticeText(actionState.text, 'hint');
+        return;
+      }
       setStudentBusyLabel('回答を更新しています');
+      clearStudentAnswerNotice();
       const payload = { student_id: student.id, test_id: currentTest.id };
       if(q.type === 'multiple') payload.choice_ids = currentSelection;
       else payload.choice_id = currentSelection && currentSelection[0] ? currentSelection[0] : null;
@@ -2237,16 +2521,19 @@
           if(json && json.error === 'time_limit_exceeded'){
             if(!examAutoSubmitRef.current){
               examAutoSubmitRef.current = true;
-              finalizeCurrentTest('time_limit');
+              await finalizeCurrentTest('time_limit');
             }
             return;
           }
-          setMessage(json && json.error ? json.error : '回答更新エラー');
+          const errorMessage = getStudentSubmitErrorMessage(json) || '回答更新エラー';
+          setStudentAnswerNoticeText(errorMessage, 'error');
+          setMessage(errorMessage);
           return;
         }
         rememberCurrentSelection(q.id, currentSelection);
         openExamReview();
       }catch(_err){
+        setStudentAnswerNoticeText('回答更新エラー。もう一度送信してください', 'error');
         setMessage('回答更新エラー');
       }finally{
         setStudentBusyLabel('');
@@ -2351,30 +2638,67 @@
       }
     }
 
-    function submitCurrentAnswer(){
+    async function submitCurrentAnswer(){
       const q = currentQuestions[currentIndex];
       if(!q) return;
-      if(isExamMode(currentTest) && examRemainingSeconds === 0){
+      const examTimeIsUp = isExamMode(currentTest) && examRemainingSeconds === 0;
+      if(examTimeIsUp){
         if(!examAutoSubmitRef.current){
           examAutoSubmitRef.current = true;
-          finalizeCurrentTest('time_limit');
+          await finalizeCurrentTest('time_limit');
         }
         return;
       }
+      const actionState = getCurrentAnswerActionState(currentSelection, examTimeIsUp);
+      if(!canSubmitCurrentAnswer(currentSelection, examTimeIsUp)){
+        setStudentAnswerNoticeText(actionState.text, 'hint');
+        return;
+      }
+      if(!student || !currentTest || !currentSessionId){
+        const errorMessage = '参加情報を確認できませんでした。もう一度テストを開いてください';
+        setStudentAnswerNoticeText(errorMessage, 'error');
+        setMessage(errorMessage);
+        return;
+      }
+      if(answerSubmitInFlightRef.current) return;
+      answerSubmitInFlightRef.current = true;
       setStudentBusyLabel('回答を送信しています');
+      clearStudentAnswerNotice();
       const payload = { student_id: student.id, test_id: currentTest.id, question_id: q.id, session_id: currentSessionId };
       if(q.type === 'multiple') payload.choice_ids = currentSelection;
       else payload.choice_id = currentSelection && currentSelection[0] ? currentSelection[0] : null;
-      fetch('/api/submit-answer', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) }).then(r=>r.json()).then(j=>{
-        if(j && j.error){
-          if(j.error === 'time_limit_exceeded'){
+      try{
+        const res = await fetch('/api/submit-answer', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+        const j = await res.json().catch(function(){ return {}; });
+        if(!res.ok || (j && j.error)){
+          if(j && j.error === 'time_limit_exceeded'){
             if(!examAutoSubmitRef.current){
               examAutoSubmitRef.current = true;
-              finalizeCurrentTest('time_limit');
+              await finalizeCurrentTest('time_limit');
             }
             return;
           }
-          setMessage(j.error);
+          if(j && j.error === 'question_already_answered'){
+            setStudentAnswerNoticeText('この問題は送信済みです。次の問題へ進みます', 'hint');
+            if(isExamMode(currentTest)){
+              rememberCurrentSelection(q.id, currentSelection);
+            }
+            nextQuestion();
+            return;
+          }
+          if(j && j.error === 'question_out_of_order' && j.expected_question_id){
+            const expectedIndex = currentQuestions.findIndex(function(item){
+              return String(item.id) === String(j.expected_question_id);
+            });
+            if(expectedIndex >= 0){
+              setCurrentIndex(expectedIndex);
+              setCurrentSelection([]);
+              setLastResult(null);
+            }
+          }
+          const errorMessage = getStudentSubmitErrorMessage(j);
+          setStudentAnswerNoticeText(errorMessage, 'error');
+          setMessage(errorMessage);
           return;
         }
         if(isExamMode(currentTest)){
@@ -2397,10 +2721,18 @@
           return;
         }
         nextQuestion();
-      }).catch(()=> setMessage('送信エラー')).finally(function(){ setStudentBusyLabel(''); });
+      }catch(_err){
+        const errorMessage = '送信エラー。選択内容は残っています。もう一度送信してください';
+        setStudentAnswerNoticeText(errorMessage, 'error');
+        setMessage('送信エラー');
+      }finally{
+        answerSubmitInFlightRef.current = false;
+        setStudentBusyLabel('');
+      }
     }
 
     function nextQuestion(){
+      clearStudentAnswerNotice();
       setCurrentSelection([]);
       setLastResult(null);
       if(currentIndex+1 < currentQuestions.length){
@@ -2432,6 +2764,7 @@
       setAnswersByQuestionId({});
       setExamReviewVisible(false);
       setReviewingQuestionIndex(null);
+      setStudentAnswerNotice(null);
       setStudent(null);
       setStudentName('');
       setStudentClassId(sharedStudentClassId || (getTestClassIds(sharedTest)[0] || getSetClassIds(sharedSet)[0] || ''));
@@ -2445,6 +2778,7 @@
       setLastResult(null);
       setMessage('');
       setStudentBusyLabel('');
+      answerSubmitInFlightRef.current = false;
     }
 
     function clearStudentSummary(){
@@ -2459,7 +2793,9 @@
       setAnswersByQuestionId({});
       setExamReviewVisible(false);
       setReviewingQuestionIndex(null);
+      setStudentAnswerNotice(null);
       setMessage('');
+      answerSubmitInFlightRef.current = false;
     }
 
     function closeExamWindow(){
@@ -2869,6 +3205,13 @@
       const progressPercent = currentQuestions.length ? Math.round(answeredCount / currentQuestions.length * 100) : 0;
       const remainingLabel = examRemainingSeconds !== null ? formatRemainingTime(examRemainingSeconds) : null;
       const examTimeIsUp = isExamMode(currentTest) && examRemainingSeconds === 0;
+      const answerActionState = getCurrentAnswerActionState(currentSelection, examTimeIsUp);
+      const answerActionNotice = studentAnswerNotice || (!showingFeedback && answerActionState.disabled
+        ? { text: answerActionState.text, tone: 'hint' }
+        : null);
+      const answerActionHint = reviewingExamQuestion
+        ? '正答や得点は提出後まで表示されません。'
+        : (showingFeedback ? '得点は最後の振り返りページで表示します。' : '');
 
       return e('div', { className: 'student-exam-shell' },
         e('section', { className: 'student-exam-main' },
@@ -2928,20 +3271,32 @@
                 e('div', { className: 'student-choice-list' }, (q.choices || []).map(function(c){
                   const selected = currentSelection.includes(c.id);
                   const inputType = q.type === 'multiple' ? 'checkbox' : 'radio';
-                  return e('label', { key: c.id, className: cx('student-choice-option', selected && 'is-selected') },
-                    e('input', { type: inputType, name: 'q' + q.id, checked: selected, disabled: !!studentBusyLabel || examTimeIsUp, onChange: function(ev){ selectChoice(q, c.id, q.type === 'multiple' ? ev.target.checked : true); } }),
+                  const choiceDisabled = !!studentBusyLabel || examTimeIsUp;
+                  return e('label', {
+                    key: c.id,
+                    className: cx('student-choice-option', selected && 'is-selected', choiceDisabled && 'is-disabled'),
+                    'aria-disabled': choiceDisabled ? 'true' : null,
+                    onClick: function(){ handleChoiceOptionTap(q, c.id, selected, choiceDisabled); }
+                  },
+                    e('input', { type: inputType, name: 'q' + q.id, checked: selected, disabled: choiceDisabled, onChange: function(ev){ handleChoiceSelection(q, c.id, q.type === 'multiple' ? ev.target.checked : true); } }),
                     e('span', { className: 'student-choice-option__marker' }),
                     e('span', { className: 'student-choice-option__text' }, c.text)
                   );
                 }))
               ),
-          e('div', { className: 'student-exam-actions' },
+          e('div', { className: cx('student-exam-actions', !showingFeedback && 'student-exam-actions--sticky') },
             reviewingExamQuestion
-              ? e('button', { onClick: saveReviewedAnswer, className: 'btn btn-primary', type: 'button', disabled: !currentSelection.length || !!studentBusyLabel || examTimeIsUp }, studentBusyLabel ? '更新中...' : '見直しリストへ戻る')
+              ? e('button', { onClick: saveReviewedAnswer, className: 'btn btn-primary', type: 'button', disabled: answerActionState.disabled }, studentBusyLabel ? '更新中...' : '見直しリストへ戻る')
               : showingFeedback
               ? e('button', { onClick: nextQuestion, className: 'btn btn-primary', type: 'button', disabled: !!studentBusyLabel }, currentIndex + 1 < currentQuestions.length ? '次の問題へ' : '振り返りを見る')
-              : e('button', { onClick: submitCurrentAnswer, className: 'btn btn-primary', type: 'button', disabled: !currentSelection.length || !!studentBusyLabel || examTimeIsUp }, studentBusyLabel ? '送信中...' : '回答を送信'),
-            reviewingExamQuestion ? e('span', { className: 'student-action-hint' }, '正答や得点は提出後まで表示されません。') : (showingFeedback ? e('span', { className: 'student-action-hint' }, '得点は最後の振り返りページで表示します。') : null)
+              : e('button', { onClick: submitCurrentAnswer, className: 'btn btn-primary', type: 'button', disabled: answerActionState.disabled }, studentBusyLabel ? '送信中...' : '回答を送信'),
+            answerActionNotice
+              ? e('span', {
+                  className: cx('student-action-message', answerActionNotice.tone === 'error' ? 'is-error' : 'is-hint'),
+                  role: answerActionNotice.tone === 'error' ? 'alert' : 'status',
+                  'aria-live': 'polite'
+                }, answerActionNotice.text)
+              : (answerActionHint ? e('span', { className: 'student-action-hint' }, answerActionHint) : null)
           )
         )
       );
@@ -3482,7 +3837,7 @@
             e('table', { className: 'reports-table' },
               e('thead', null, e('tr', null, e('th', null, renderSortLabel('日時','finished_at')), e('th', null, renderSortLabel('生徒名','studentName')), e('th', null, renderSortLabel('クラス','className')), e('th', null, renderSortLabel('テスト名','testName')), e('th', null, renderSortLabel('得点','score')), e('th', null, e('span', null, '満点')), e('th', null, renderSortLabel('正答率','percent')), e('th', null, '操作'))),
               e('tbody', null,
-                pageSlice.length === 0 ? e('tr', null, e('td', { colSpan: 8, className: 'small' }, reportsLoading ? '読み込み中...' : '該当するテストがありません')) : pageSlice.map(function(row, idx){
+                pageSlice.length === 0 ? e('tr', null, e('td', { colSpan: 8, className: 'small' }, reportsLoading ? '読み込み中...' : '完了した受験記録はまだありません')) : pageSlice.map(function(row, idx){
                   const keyId = (row.studentId||'')+'-'+(row.testId||'')+'-'+idx;
                   const pct = Math.round((row.percent||0)*100)/100;
                   const pctClass = pct >= 70 ? 'score high' : (pct >= 40 ? 'score' : 'score low');
