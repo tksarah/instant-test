@@ -2468,11 +2468,6 @@
       selectChoice(q, choiceId, checked);
     }
 
-    function handleChoiceOptionTap(q, choiceId, selected, disabled){
-      if(disabled) return;
-      handleChoiceSelection(q, choiceId, q && q.type === 'multiple' ? !selected : true);
-    }
-
     function openExamReview(){
       setExamReviewVisible(true);
       setReviewingQuestionIndex(null);
@@ -3275,8 +3270,7 @@
                   return e('label', {
                     key: c.id,
                     className: cx('student-choice-option', selected && 'is-selected', choiceDisabled && 'is-disabled'),
-                    'aria-disabled': choiceDisabled ? 'true' : null,
-                    onClick: function(){ handleChoiceOptionTap(q, c.id, selected, choiceDisabled); }
+                    'aria-disabled': choiceDisabled ? 'true' : null
                   },
                     e('input', { type: inputType, name: 'q' + q.id, checked: selected, disabled: choiceDisabled, onChange: function(ev){ handleChoiceSelection(q, c.id, q.type === 'multiple' ? ev.target.checked : true); } }),
                     e('span', { className: 'student-choice-option__marker' }),
