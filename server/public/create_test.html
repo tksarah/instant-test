@@ -92,6 +92,14 @@
                 </label>
               </div>
               <div class="auto-row__item">
+                <label>問題形式
+                  <select id="auto-question-type">
+                    <option value="choice" selected>選択問題</option>
+                    <option value="fill_blank">虫食い問題</option>
+                  </select>
+                </label>
+              </div>
+              <div class="auto-row__item">
                 <label>選択数
                   <select id="auto-choice-count">
                     <option value="2">2</option>
@@ -126,6 +134,16 @@
             <strong>注意:</strong> このテストの問題数は最大<strong>100問</strong>までです。
           </div>
           <div class="task-form-stack" style="margin-top:16px;">
+            <div class="auto-row">
+              <div class="auto-row__item">
+                <label>問題形式
+                  <select id="question-type-select">
+                    <option value="choice" selected>選択問題</option>
+                    <option value="fill_blank">虫食い問題</option>
+                  </select>
+                </label>
+              </div>
+            </div>
             <div class="builder-editor-toolbar">
               <div class="builder-editor-toolbar__stats">
                 <span id="editor-mode-chip" class="task-chip task-chip-muted">新規作成</span>
@@ -151,6 +169,7 @@
                   <button class="btn btn-small btn-ghost" type="button" id="insert-code-block" title="コードブロック">&lt;/&gt;</button>
                   <button class="btn btn-small btn-ghost" type="button" id="insert-link" title="リンク">Link</button>
                   <button class="btn btn-small btn-ghost" type="button" id="insert-image" title="画像">Image</button>
+                  <button class="btn btn-small btn-ghost" type="button" id="insert-blank-marker" title="空欄を挿入" style="display:none;">____</button>
                   <button class="btn btn-small btn-ghost" type="button" id="clear-rich-format" title="書式クリア">Clear</button>
                 </div>
               </div>

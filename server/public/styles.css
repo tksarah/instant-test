@@ -696,13 +696,20 @@ legend{padding:0 8px;color:var(--text-strong);font-weight:700}
   gap:4px;
   padding:14px 16px;
   border-radius:18px;
-  background:#edf8f2;
-  border:1px solid rgba(47,158,93,0.16);
-  color:#20483f;
+  background:var(--bg-soft);
+  border:1px solid var(--border-soft);
+  color:var(--text-muted);
+}
+.student-preview-inline-note strong{
+  color:var(--color-main);
+}
+.student-preview-inline-note span{
+  color:var(--text-muted);
 }
 .student-preview-inline-note.is-strong{
-  background:linear-gradient(180deg,#f9f3df,#f4fbf6);
-  border-color:rgba(197,162,93,0.22);
+  background:linear-gradient(180deg,var(--color-accent-soft),#f8fafc);
+  border-color:rgba(31,111,235,0.18);
+  box-shadow:inset 4px 0 0 rgba(31,111,235,0.24);
 }
 
 .student-empty-state{
@@ -1165,6 +1172,11 @@ legend{padding:0 8px;color:var(--text-strong);font-weight:700}
   border-radius:999px;
   background:linear-gradient(90deg,var(--color-accent),#6fb0ff);
 }
+.report-bars__actions{
+  display:flex;
+  justify-content:center;
+  padding-top:4px;
+}
 
 .reports-layout{display:flex;gap:20px;align-items:flex-start}
 .reports-main{flex:1}
@@ -1246,9 +1258,28 @@ kbd{display:inline-flex;align-items:center;justify-content:center;min-width:22px
 .rich-question-content pre code{background:transparent;border:0;color:inherit;padding:0;white-space:pre}
 .rich-question-content img{display:block;max-width:100%;height:auto;margin:0.75em 0;border-radius:6px;border:1px solid var(--border-soft)}
 .rich-question-content a{color:var(--color-accent);font-weight:700;text-decoration:underline}
+.fill-blank-marker{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-width:7.5em;
+  padding:0.08em 0.72em;
+  margin:0 0.12em;
+  border:2px solid #3f7f72;
+  border-radius:6px;
+  background:#eff8f3;
+  color:#245c52;
+  font-weight:800;
+  line-height:1.45;
+  white-space:nowrap;
+  vertical-align:baseline;
+  box-shadow:inset 0 -2px 0 rgba(63,127,114,0.14);
+}
 .student-question-rich{font-size:26px}
 .student-summary-question{font-weight:700}
 .rich-question-content--compact{font-size:14px}
+.student-question-rich .fill-blank-marker{min-width:8.5em;padding:0.12em 0.85em}
+.rich-question-content--compact .fill-blank-marker{min-width:5.5em;padding:0.04em 0.55em;border-width:1px;font-size:0.92em}
 
 @media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
 
@@ -2738,6 +2769,55 @@ label{font-size:13px;color:var(--text-muted);font-weight:500}
 .student-choice-option.is-correct .student-choice-option__marker{border-color:var(--correct);background:var(--correct);box-shadow:inset 0 0 0 5px #fff}
 .student-choice-option.is-incorrect{background:#fbf4ed;border-color:#e1c6a7}
 .student-choice-option.is-incorrect .student-choice-option__marker{border-color:var(--incorrect);background:var(--incorrect);box-shadow:inset 0 0 0 5px #fff}
+
+.student-choice-option:focus-within{
+  outline:3px solid rgba(31,111,235,0.18);
+  outline-offset:2px;
+}
+
+.student-choice-option__marker{
+  position:relative;
+}
+
+.student-choice-option--single .student-choice-option__marker{
+  border-radius:50%;
+}
+
+.student-choice-option--multiple .student-choice-option__marker{
+  border-radius:4px;
+}
+
+.student-choice-option--single.is-selected .student-choice-option__marker{
+  border-color:var(--color-accent);
+  background:#fff;
+  box-shadow:none;
+}
+
+.student-choice-option--single.is-selected .student-choice-option__marker::after{
+  content:"";
+  position:absolute;
+  inset:5px;
+  border-radius:50%;
+  background:var(--color-accent);
+}
+
+.student-choice-option--multiple.is-selected .student-choice-option__marker{
+  border-color:var(--color-accent);
+  background:var(--color-accent);
+  box-shadow:none;
+}
+
+.student-choice-option--multiple.is-selected .student-choice-option__marker::after{
+  content:"";
+  position:absolute;
+  left:6px;
+  top:2px;
+  width:6px;
+  height:12px;
+  border:solid #fff;
+  border-width:0 2px 2px 0;
+  transform:rotate(45deg);
+}
 
 .student-feedback-card.is-correct,
 .student-summary-card.is-correct{background:#f6fbf8;border-color:#caded0}

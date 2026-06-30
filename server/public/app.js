@@ -1,13 +1,71 @@
 (function(){
   const e = React.createElement;
+  const FILL_BLANK_TYPE = 'fill_blank';
+  const BLANK_MARKER = '____';
+
+  function isFillBlankQuestion(question){
+    return !!question && question.type === FILL_BLANK_TYPE;
+  }
+
+  function renderTextWithBlankMarker(text){
+    const rawText = String(text || '');
+    if(rawText.indexOf(BLANK_MARKER) < 0) return rawText;
+    const parts = rawText.split(BLANK_MARKER);
+    const nodes = [];
+    parts.forEach(function(part, index){
+      if(part) nodes.push(part);
+      if(index < parts.length - 1){
+        nodes.push(e('span', { key: 'blank-' + index, className: 'fill-blank-marker' }, '空欄'));
+      }
+    });
+    return nodes;
+  }
+
+  function decorateFillBlankHtml(html){
+    const template = document.createElement('template');
+    template.innerHTML = String(html || '');
+
+    function replaceTextNode(node){
+      const value = node.textContent || '';
+      if(value.indexOf(BLANK_MARKER) < 0) return;
+      const fragment = document.createDocumentFragment();
+      const parts = value.split(BLANK_MARKER);
+      parts.forEach(function(part, index){
+        if(part) fragment.appendChild(document.createTextNode(part));
+        if(index < parts.length - 1){
+          const marker = document.createElement('span');
+          marker.className = 'fill-blank-marker';
+          marker.textContent = '空欄';
+          fragment.appendChild(marker);
+        }
+      });
+      node.parentNode.replaceChild(fragment, node);
+    }
+
+    function walk(node){
+      Array.prototype.slice.call(node.childNodes).forEach(function(child){
+        if(child.nodeType === Node.TEXT_NODE){
+          replaceTextNode(child);
+        } else if(child.nodeType === Node.ELEMENT_NODE){
+          walk(child);
+        }
+      });
+    }
+
+    walk(template.content);
+    return template.innerHTML;
+  }
+
   function renderRichQuestionContent(question, options){
     const config = options || {};
     const html = question && typeof question.content_html === 'string' ? question.content_html.trim() : '';
     const className = config.className || 'rich-question-content';
     if(html){
-      return e('div', { className: className, dangerouslySetInnerHTML: { __html: html } });
+      const decoratedHtml = isFillBlankQuestion(question) ? decorateFillBlankHtml(html) : html;
+      return e('div', { className: className, dangerouslySetInnerHTML: { __html: decoratedHtml } });
     }
-    return e(config.fallbackTag || 'div', { className: className }, (question && (question.text || question.question_text)) || config.fallbackText || '');
+    const text = (question && (question.text || question.question_text)) || config.fallbackText || '';
+    return e(config.fallbackTag || 'div', { className: className }, isFillBlankQuestion(question) ? renderTextWithBlankMarker(text) : text);
   }
 
   function renderQuestionList(items){
@@ -459,6 +517,7 @@
     const [reportSummaryData, setReportSummaryData] = React.useState(null);
     const [reportFilterAnalytics, setReportFilterAnalytics] = React.useState(null);
     const [reportFilterAnalyticsLoading, setReportFilterAnalyticsLoading] = React.useState(false);
+    const [reportQuestionRatesExpanded, setReportQuestionRatesExpanded] = React.useState(false);
     const [testSetSummaries, setTestSetSummaries] = React.useState([]);
     const [testSetSummariesLoading, setTestSetSummariesLoading] = React.useState(false);
     const [initialDataLoading, setInitialDataLoading] = React.useState(true);
@@ -2415,6 +2474,12 @@
       return formatAnswerTexts(texts, '未回答');
     }
 
+    function getStudentQuestionTypeLabel(question){
+      if(question && question.type === 'fill_blank') return '虫食い';
+      if(question && question.type === 'multiple') return '複数選択';
+      return '１つ選択';
+    }
+
     function setStudentAnswerNoticeText(text, tone){
       setStudentAnswerNotice(text ? { text: text, tone: tone || 'hint' } : null);
     }
@@ -2603,6 +2668,7 @@
             const correct_texts = (d.correct_choice_ids || []).map(id => choiceMap[id] || String(id)).filter(Boolean);
             return {
             questionId: d.question_id,
+            type: d.type || summaryQuestion.type || 'single',
             text: d.text,
             content_html: d.content_html || '',
             content_format: d.content_format || (d.content_html ? 'html' : 'plain'),
@@ -2702,6 +2768,7 @@
         if(isImmediateFeedbackMode(currentTest) && j && j.feedback){
           setLastResult({
             questionId: j.feedback.question_id || q.id,
+            type: j.feedback.type || q.type || 'single',
             text: j.feedback.question_text || q.text,
             content_html: j.feedback.content_html || q.content_html || '',
             content_format: j.feedback.content_format || q.content_format || (j.feedback.content_html || q.content_html ? 'html' : 'plain'),
@@ -3259,20 +3326,21 @@
               )
             : e('article', { className: 'student-question-card' },
                 e('div', { className: 'student-question-card__header' },
-                    e('span', { className: 'student-question-card__type-label' }, q && q.type === 'multiple' ? '複数選択' : '１つ選択')
+                    e('span', { className: 'student-question-card__type-label' }, getStudentQuestionTypeLabel(q))
                   ),
                 renderRichQuestionContent(q, { className: 'rich-question-content student-question-rich' }),
                 e('p', { className: 'student-question-card__hint' }, ''),
                 e('div', { className: 'student-choice-list' }, (q.choices || []).map(function(c){
                   const selected = currentSelection.includes(c.id);
-                  const inputType = q.type === 'multiple' ? 'checkbox' : 'radio';
+                  const isMultipleChoice = q.type === 'multiple';
+                  const inputType = isMultipleChoice ? 'checkbox' : 'radio';
                   const choiceDisabled = !!studentBusyLabel || examTimeIsUp;
                   return e('label', {
                     key: c.id,
-                    className: cx('student-choice-option', selected && 'is-selected', choiceDisabled && 'is-disabled'),
+                    className: cx('student-choice-option', isMultipleChoice ? 'student-choice-option--multiple' : 'student-choice-option--single', selected && 'is-selected', choiceDisabled && 'is-disabled'),
                     'aria-disabled': choiceDisabled ? 'true' : null
                   },
-                    e('input', { type: inputType, name: 'q' + q.id, checked: selected, disabled: choiceDisabled, onChange: function(ev){ handleChoiceSelection(q, c.id, q.type === 'multiple' ? ev.target.checked : true); } }),
+                    e('input', { type: inputType, name: 'q' + q.id, checked: selected, disabled: choiceDisabled, onChange: function(ev){ handleChoiceSelection(q, c.id, isMultipleChoice ? ev.target.checked : true); } }),
                     e('span', { className: 'student-choice-option__marker' }),
                     e('span', { className: 'student-choice-option__text' }, c.text)
                   );
@@ -3455,6 +3523,10 @@
       ? buildReportClassTestSummaries(filteredReports)
       : [];
 
+    React.useEffect(function(){
+      setReportQuestionRatesExpanded(false);
+    }, [selectedReportTestId, reportFilterClassId, selectedReportRowsKey]);
+
     function buildSummaryFromAnswerRows(questionsForTest, answerRows, sessionId){
       const scopedRows = (answerRows || []).filter(function(answer){
         if(!sessionId) return true;
@@ -3632,6 +3704,13 @@
         reportFilterAnalytics.testName || 'テスト',
         reportFilterAnalytics.className || ''
       ].filter(Boolean).join(' / ');
+      const questionRates = Array.isArray(reportFilterAnalytics.questionRates) ? reportFilterAnalytics.questionRates : [];
+      const questionRateLimit = 10;
+      const shouldCollapseQuestionRates = questionRates.length > questionRateLimit;
+      const visibleQuestionRates = shouldCollapseQuestionRates && !reportQuestionRatesExpanded
+        ? questionRates.slice(0, questionRateLimit)
+        : questionRates;
+      const hiddenQuestionRatesCount = Math.max(0, questionRates.length - questionRateLimit);
 
       return e('div', { className: 'report-filter-analytics' },
         e('div', { className: 'report-filter-analytics__header' },
@@ -3656,21 +3735,33 @@
                   reportFilterAnalytics.partialError
                     ? e('div', { className: 'small report-filter-analytics__note' }, reportFilterAnalytics.partialError)
                     : null,
-                  !(reportFilterAnalytics.questionRates || []).length
+                  !questionRates.length
                     ? e('div', { className: 'small' }, '対象データがありません')
-                    : e('div', { className: 'report-bars' },
-                        reportFilterAnalytics.questionRates.map(function(item){
-                          return e('div', { key: item.questionId, className: 'report-bars__row' },
-                            e('div', { className: 'report-bars__meta' },
-                              e('span', { className: 'report-bars__label' }, item.label),
-                              e('span', { className: 'report-bars__text', title: item.text }, item.text),
-                              e('span', { className: 'report-bars__value' }, item.rate + '%')
-                            ),
-                            e('div', { className: 'report-bars__track', 'aria-hidden': true },
-                              e('div', { className: 'report-bars__fill', style: { width: item.rate + '%' } })
+                    : e(React.Fragment, null,
+                        e('div', { className: 'report-bars' },
+                          visibleQuestionRates.map(function(item){
+                            return e('div', { key: item.questionId, className: 'report-bars__row' },
+                              e('div', { className: 'report-bars__meta' },
+                                e('span', { className: 'report-bars__label' }, item.label),
+                                e('span', { className: 'report-bars__text', title: item.text }, item.text),
+                                e('span', { className: 'report-bars__value' }, item.rate + '%')
+                              ),
+                              e('div', { className: 'report-bars__track', 'aria-hidden': true },
+                                e('div', { className: 'report-bars__fill', style: { width: item.rate + '%' } })
+                              )
+                            );
+                          })
+                        ),
+                        shouldCollapseQuestionRates
+                          ? e('div', { className: 'report-bars__actions' },
+                              e('button', {
+                                className: 'btn btn-small btn-ghost',
+                                type: 'button',
+                                'aria-expanded': reportQuestionRatesExpanded,
+                                onClick: function(){ setReportQuestionRatesExpanded(!reportQuestionRatesExpanded); }
+                              }, reportQuestionRatesExpanded ? '折りたたむ' : '残り' + hiddenQuestionRatesCount + '問を表示')
                             )
-                          );
-                        })
+                          : null
                       )
                 )
           )

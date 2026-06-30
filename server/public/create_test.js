@@ -5,7 +5,7 @@
   function createEmptyChoice(){ return { text: '', is_correct: false }; }
   function nextFrame(fn){ window.requestAnimationFrame(fn); }
 
-  const state = { questions: [], editingIndex: -1, editorChoices: [], page: 0, selectedQuestionIndexes: new Set() };
+  const state = { questions: [], editingIndex: -1, editorChoices: [], editorQuestionType: 'choice', page: 0, selectedQuestionIndexes: new Set() };
   let pendingQuestionDeletion = null;
   let isDirty = false;
   let lastSavedClassId = '';
@@ -19,6 +19,8 @@
   const MIN_CHOICES = 2;
   const PAGE_SIZE = 5;
   const MAX_QUESTION_HTML_LENGTH = 100 * 1024;
+  const FILL_BLANK_TYPE = 'fill_blank';
+  const BLANK_MARKER = '____';
   const ALLOWED_RICH_TAGS = new Set(['P', 'BR', 'STRONG', 'B', 'EM', 'I', 'U', 'UL', 'OL', 'LI', 'BLOCKQUOTE', 'PRE', 'CODE', 'A', 'IMG']);
 
   function normalizeAnswerMode(value){
@@ -32,6 +34,65 @@
     if(value === null || typeof value === 'undefined' || value === '') return null;
     const parsed = Number(value);
     return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  function normalizeEditorQuestionType(value){
+    return value === FILL_BLANK_TYPE ? FILL_BLANK_TYPE : 'choice';
+  }
+
+  function getQuestionTypeLabel(type){
+    if(type === FILL_BLANK_TYPE) return '虫食い';
+    if(type === 'multiple') return '複数選択';
+    return '１つ選択';
+  }
+
+  function getBlankMarkerCount(text){
+    const matches = String(text || '').match(/____/g);
+    return matches ? matches.length : 0;
+  }
+
+  function decorateFillBlankHtml(html){
+    const template = document.createElement('template');
+    template.innerHTML = String(html || '');
+
+    function replaceTextNode(node){
+      const value = node.textContent || '';
+      if(value.indexOf(BLANK_MARKER) < 0) return;
+      const fragment = document.createDocumentFragment();
+      const parts = value.split(BLANK_MARKER);
+      parts.forEach(function(part, index){
+        if(part) fragment.appendChild(document.createTextNode(part));
+        if(index < parts.length - 1){
+          const marker = document.createElement('span');
+          marker.className = 'fill-blank-marker';
+          marker.textContent = '空欄';
+          fragment.appendChild(marker);
+        }
+      });
+      node.parentNode.replaceChild(fragment, node);
+    }
+
+    function walk(node){
+      Array.prototype.slice.call(node.childNodes).forEach(function(child){
+        if(child.nodeType === Node.TEXT_NODE){
+          replaceTextNode(child);
+        } else if(child.nodeType === Node.ELEMENT_NODE){
+          walk(child);
+        }
+      });
+    }
+
+    walk(template.content);
+    return template.innerHTML;
+  }
+
+  function getEditorQuestionType(){
+    return normalizeEditorQuestionType(state.editorQuestionType);
+  }
+
+  function getAutoQuestionType(){
+    const field = el('auto-question-type');
+    return field && field.value === FILL_BLANK_TYPE ? FILL_BLANK_TYPE : 'choice';
   }
 
   function getQuestionEditor(){
@@ -125,7 +186,10 @@
     if(!preview) return;
     const html = getQuestionHtml();
     const text = getQuestionPlainText();
-    preview.innerHTML = html || (text ? escapeHtml(text) : '<span class="rich-preview-placeholder">問題文のプレビュー</span>');
+    const previewHtml = html || (text ? escapeHtml(text) : '<span class="rich-preview-placeholder">問題文のプレビュー</span>');
+    preview.innerHTML = getEditorQuestionType() === FILL_BLANK_TYPE && (html || text)
+      ? decorateFillBlankHtml(previewHtml)
+      : previewHtml;
   }
 
   function questionPayloadFields(question){
@@ -216,6 +280,7 @@
     const draft = {
       text: getQuestionPlainText(),
       content_html: getQuestionHtml(),
+      question_type: getEditorQuestionType(),
       explanation: String(explanationField ? explanationField.value : '').trim(),
       choices: state.editorChoices.map(normalizeChoice).filter(function(choice){
         return choice.text || choice.is_correct;
@@ -227,6 +292,7 @@
       const original = {
         text: String((source && source.text) || '').trim(),
         content_html: sanitizeRichHtml((source && source.content_html) || ''),
+        question_type: normalizeEditorQuestionType(source && source.type),
         explanation: String((source && source.explanation) || '').trim(),
         choices: ((source && source.choices) || []).map(normalizeChoice).filter(function(choice){
           return choice.text || choice.is_correct;
@@ -269,9 +335,14 @@
     const modeChip = el('editor-mode-chip');
     const questionCount = el('editor-question-count');
     const choiceCount = el('editor-choice-count');
+    const questionType = getEditorQuestionType();
+    const questionTypeField = el('question-type-select');
+    const blankButton = el('insert-blank-marker');
     if(modeChip) modeChip.textContent = state.editingIndex >= 0 ? '編集中' : '新規作成';
     if(questionCount) questionCount.textContent = state.questions.length + ' / ' + MAX_QUESTIONS + '問';
-    if(choiceCount) choiceCount.textContent = '選択肢 ' + state.editorChoices.length + '件';
+    if(choiceCount) choiceCount.textContent = (questionType === FILL_BLANK_TYPE ? '候補 ' : '選択肢 ') + state.editorChoices.length + '件';
+    if(questionTypeField) questionTypeField.value = questionType;
+    if(blankButton) blankButton.style.display = questionType === FILL_BLANK_TYPE ? '' : 'none';
     // update add/update button label based on editing state
     const addBtn = el('add-question');
     if(addBtn) addBtn.textContent = state.editingIndex >= 0 ? '問題を更新' : '問題を追加';
@@ -307,7 +378,7 @@
     const multipleField = el('auto-allow-multiple');
     if(!choiceCountField || !multipleToggle || !multipleField) return;
     const choiceCount = parseInt(choiceCountField.value, 10) || 2;
-    const enabled = choiceCount === 4;
+    const enabled = getAutoQuestionType() === 'choice' && choiceCount === 4;
     multipleToggle.style.display = enabled ? 'flex' : 'none';
     multipleField.disabled = !enabled;
     if(!enabled) multipleField.checked = false;
@@ -376,6 +447,7 @@
     setQuestionHtml('');
     el('question-explanation').value = '';
     state.editorChoices = [ createEmptyChoice(), createEmptyChoice() ];
+    state.editorQuestionType = 'choice';
     state.editingIndex = -1;
     setEditorTitle('問題を作成');
     renderChoicesEditor();
@@ -493,7 +565,9 @@
       // クリックで全文をモーダルまたはダイアログで表示（簡易実装：alert）
       qdiv.style.cursor = 'pointer';
       qdiv.addEventListener('click', function(){ if(rawText) { alert(rawText); } });
-      const meta = document.createElement('div'); meta.className = 'task-helper-text'; meta.appendChild(document.createTextNode('選択肢: ' + (q.choices ? q.choices.length : 0) + ' / ' + ((q.type || 'single') === 'multiple' ? '複数正解' : '単一正解')));
+      const meta = document.createElement('div');
+      meta.className = 'task-helper-text';
+      meta.appendChild(document.createTextNode((q.type === FILL_BLANK_TYPE ? '候補: ' : '選択肢: ') + (q.choices ? q.choices.length : 0) + ' / ' + getQuestionTypeLabel(q.type || 'single')));
       const btnEdit = document.createElement('button'); btnEdit.className='btn btn-small btn-primary'; btnEdit.type='button'; btnEdit.textContent='編集'; btnEdit.addEventListener('click', function(){ editQuestion(idx); });
       const btnDel = document.createElement('button'); btnDel.className='btn btn-small btn-ghost'; btnDel.type='button'; btnDel.textContent='削除'; btnDel.addEventListener('click', function(){ deleteQuestion(idx); });
       const btnDup = document.createElement('button'); btnDup.className='btn btn-small btn-secondary'; btnDup.type='button'; btnDup.textContent='複製'; btnDup.title = 'この問題を複製して次に追加';
@@ -695,12 +769,14 @@
     setEditorTitle('問題を編集'); setQuestionHtml(q.content_html || '', q.text || '');
     el('question-explanation').value = q.explanation || '';
     state.editorChoices = (q.choices || []).map(c => ({ id: c.id, text: c.text || '', is_correct: !!c.is_correct }));
+    state.editorQuestionType = q.type === FILL_BLANK_TYPE ? FILL_BLANK_TYPE : 'choice';
     state.editingIndex = index; renderChoicesEditor(); refreshDirtyState(); focusQuestionField();
   }
 
   function addQuestionFromEditor(){
     const contentHtml = getQuestionHtml();
     const text = getQuestionPlainText();
+    const editorQuestionType = getEditorQuestionType();
     if(contentHtml.length > MAX_QUESTION_HTML_LENGTH){ setStatus('問題文のHTMLが長すぎます', true); return; }
     if(!text && !contentHtml){ setStatus('問題文を入力してください', true); return; }
     const explanation = el('question-explanation').value.trim();
@@ -709,7 +785,12 @@
     if(choices.length < 2){ setStatus('選択肢を2つ以上用意してください', true); return; }
     const correctCount = choices.filter(c=>c.is_correct).length;
     if(correctCount === 0){ setStatus('少なくとも1つの選択肢を正解に設定してください', true); return; }
-    const type = correctCount > 1 ? 'multiple' : 'single';
+    if(editorQuestionType === FILL_BLANK_TYPE){
+      const blankCount = getBlankMarkerCount(text);
+      if(blankCount !== 1){ setStatus('虫食い問題の問題文には空欄記号「____」を1つだけ入れてください', true); return; }
+      if(correctCount !== 1){ setStatus('虫食い問題の正解候補は1つだけにしてください', true); return; }
+    }
+    const type = editorQuestionType === FILL_BLANK_TYPE ? FILL_BLANK_TYPE : (correctCount > 1 ? 'multiple' : 'single');
     const q = { text: text, content_html: contentHtml, content_format: contentHtml ? 'html' : 'plain', choices: choices, type: type, points: 1, explanation: explanation };
     if(state.editingIndex >= 0){
       // preserve id if editing existing question
@@ -849,6 +930,10 @@
     refreshDirtyState();
   }
 
+  function insertBlankMarker(){
+    insertHtmlAtSelection(BLANK_MARKER);
+  }
+
   function insertInlineCode(){
     const selection = window.getSelection();
     const text = selection && selection.toString() ? selection.toString() : 'code';
@@ -918,6 +1003,8 @@
     const imageButton = el('insert-image');
     const imageFile = el('question-image-file');
     if(imageButton && imageFile) imageButton.addEventListener('click', function(){ imageFile.click(); });
+    const blankButton = el('insert-blank-marker');
+    if(blankButton) blankButton.addEventListener('click', insertBlankMarker);
     if(imageFile) imageFile.addEventListener('change', function(){
       const file = imageFile.files && imageFile.files[0];
       uploadQuestionImageFile(file).finally(function(){ imageFile.value = ''; });
@@ -970,6 +1057,12 @@
     el('add-choice').addEventListener('click', function(e){ e.preventDefault(); state.editorChoices.push(createEmptyChoice()); renderChoicesEditor(); refreshDirtyState(); focusChoiceInput(state.editorChoices.length - 1); });
     el('set-two-choices').addEventListener('click', function(e){ e.preventDefault(); setChoiceCount(2); refreshDirtyState(); setStatus('選択肢を2件に整えました'); focusChoiceInput(0); });
     el('set-four-choices').addEventListener('click', function(e){ e.preventDefault(); setChoiceCount(4); refreshDirtyState(); setStatus('選択肢を4件に整えました'); focusChoiceInput(2); });
+    if(el('question-type-select')) el('question-type-select').addEventListener('change', function(e){
+      state.editorQuestionType = normalizeEditorQuestionType(e.target.value);
+      syncEditorMeta();
+      updateQuestionPreview();
+      refreshDirtyState();
+    });
     el('add-question').addEventListener('click', function(e){ e.preventDefault(); addQuestionFromEditor(); });
     el('clear-editor').addEventListener('click', function(e){ e.preventDefault(); resetEditor(); refreshDirtyState(); setStatus('エディタをクリアしました'); });
     el('save-test').addEventListener('click', function(e){ e.preventDefault(); saveTest(); });
@@ -984,7 +1077,7 @@
     setupDeleteQuestionsModal();
 
     // initialize editor and classes, and prefill from query params if provided
-    updateTimeLimitControl(); resetEditor(); renderQuestionsList();
+    updateTimeLimitControl(); resetEditor(); renderQuestionsList(); syncAutoGenerationOptions();
     (async function(){
       const classes = await loadClasses();
       // parse query params
@@ -1034,6 +1127,7 @@
     })();
 
     document.querySelectorAll('input[name="create-mode"]').forEach(function(r){ r.addEventListener('change', updateCreateModeUI); });
+    if(el('auto-question-type')) el('auto-question-type').addEventListener('change', syncAutoGenerationOptions);
     if(el('auto-choice-count')) el('auto-choice-count').addEventListener('change', syncAutoGenerationOptions);
 
     const autoBtn = el('auto-generate');
@@ -1041,6 +1135,7 @@
       autoBtn.addEventListener('click', async function(){
         const qcount = parseInt(el('auto-question-count').value, 10) || 0;
         if(qcount < 1 || qcount > 10){ setStatus('問題数は1〜10の間で指定してください', true); return; }
+        const autoQuestionType = getAutoQuestionType();
         const choiceCount = parseInt(el('auto-choice-count').value, 10) || 2;
         if(choiceCount < 2 || choiceCount > 4){ setStatus('選択数は2〜4の間で指定してください', true); return; }
         const desc = el('auto-class-description').value || '';
@@ -1056,8 +1151,9 @@
               lessonContent: desc,
               questionCount: qcount,
               difficulty: el('auto-difficulty').value,
+              questionType: autoQuestionType,
               choiceCount: choiceCount,
-              allowMultipleAnswers: !!(el('auto-allow-multiple') && el('auto-allow-multiple').checked)
+              allowMultipleAnswers: autoQuestionType === 'choice' && !!(el('auto-allow-multiple') && el('auto-allow-multiple').checked)
             })
           });
           const payload = await response.json().catch(function(){ return null; });

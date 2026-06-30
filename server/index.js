@@ -910,6 +910,7 @@ function buildAnswerFeedback(questionRow, choiceRows, submittedChoiceIds, correc
   const correctIds = (choiceRows || []).filter(row => row.is_correct === 1 || row.is_correct === true).map(row => row.id);
   return {
     question_id: questionRow.id,
+    type: questionRow.type || 'single',
     question_text: questionRow.text,
     content_html: questionRow.content_html || '',
     content_format: questionRow.content_format || (questionRow.content_html ? 'html' : 'plain'),
@@ -930,7 +931,7 @@ async function saveSessionAnswer(session, test, questionId, submittedChoiceIds, 
   let questionRow = null;
   if(opts.checkQuestionBeforePlan){
     questionRow = await dbGetAsync(
-      'SELECT id, test_id, text, explanation, content_html, content_format FROM questions WHERE id=? AND test_id=?',
+      'SELECT id, test_id, type, text, explanation, content_html, content_format FROM questions WHERE id=? AND test_id=?',
       [normalizedQuestionId, session.test_id]
     );
     if(!questionRow) throw makeHttpError('invalid_question_id', 400);
@@ -942,7 +943,7 @@ async function saveSessionAnswer(session, test, questionId, submittedChoiceIds, 
 
   if(!questionRow){
     questionRow = await dbGetAsync(
-      'SELECT id, test_id, text, explanation, content_html, content_format FROM questions WHERE id=? AND test_id=?',
+      'SELECT id, test_id, type, text, explanation, content_html, content_format FROM questions WHERE id=? AND test_id=?',
       [normalizedQuestionId, session.test_id]
     );
     if(!questionRow) throw makeHttpError('invalid_question_id', 400);
@@ -1069,6 +1070,7 @@ function buildTestSummaryForStudent(testId, studentId, sessionId){
             if(correct) earned += qTotal;
             return {
               question_id: q.id,
+              type: q.type || 'single',
               text: q.text,
               content_html: q.content_html || '',
               content_format: q.content_format || (q.content_html ? 'html' : 'plain'),
@@ -1984,10 +1986,11 @@ app.get('/api/exam-sessions/:id/questions', (req, res) => {
 
 // AI generate (Gemini)
 app.post('/api/generate-questions', requireTeacher, async (req, res) => {
-  const { testId, text, lessonContent, questionCount, difficulty, choiceCount, allowMultipleAnswers } = req.body || {};
+  const { testId, text, lessonContent, questionCount, difficulty, choiceCount, allowMultipleAnswers, questionType } = req.body || {};
   const sourceText = typeof lessonContent === 'string' && lessonContent.trim() ? lessonContent.trim() : (typeof text === 'string' ? text.trim() : '');
   const requestedQuestionCount = Math.max(1, Math.min(10, parseInt(questionCount, 10) || 3));
   const requestedChoiceCount = Math.max(2, Math.min(4, parseInt(choiceCount, 10) || 4));
+  const requestedQuestionType = questionType === 'fill_blank' ? 'fill_blank' : 'choice';
   const difficultyMap = {
     easy: 'やさしい',
     normal: 'ふつう',
@@ -2004,8 +2007,10 @@ app.post('/api/generate-questions', requireTeacher, async (req, res) => {
       lessonContent: sourceText,
       questionCount: requestedQuestionCount,
       choiceCount: requestedChoiceCount,
+      difficultyKey,
       difficultyLabel: difficultyMap[difficultyKey],
-      allowMultipleAnswers: !!allowMultipleAnswers && requestedChoiceCount === 4
+      questionType: requestedQuestionType,
+      allowMultipleAnswers: requestedQuestionType === 'choice' && !!allowMultipleAnswers && requestedChoiceCount === 4
     });
 
     if(!testId){
